@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "2026-01",
+  "sourceSystem": "salesforce-crm",
+  "exportedAt": "2026-11-25T04:00:00.000Z",
+  "customers": [
+    {
+      "accountId": "acct_01J9X8K2M4N6P8Q0R2S4",
+      "externalCrmId": "sf_0018Z00002X9ACME",
+      "name": "Acme Global Logistics",
+      "primaryEmail": "ops@acmelogistics.example",
+      "tier": "ENTERPRISE",
+      "status": "ACTIVE",
+      "region": "us-east",
+      "annualRecurringRevenue": 1850000
+    },
+    {
+      "accountId": "acct_01J9X8K2M4N6P8Q0R2S5",
+      "externalCrmId": "sf_0018Z00002X9NSTR",
+      "name": "Northstar FinTech Corp",
+      "primaryEmail": "platform-eng@northstarfintech.example",
+      "tier": "BUSINESS",
+      "status": "ACTIVE",
+      "region": "eu-central",
+      "annualRecurringRevenue": 420000
+    },
+    {
+      "accountId": "acct_01J9X8K2M4N6P8Q0R2S6",
+      "externalCrmId": "sf_0018Z00002X9VLXB",
+      "name": "Velox BioLabs Inc",
+      "primaryEmail": "it-admin@veloxbiolabs.example",
+      "tier": "STARTER",
+      "status": "SUSPENDED",
+      "region": "us-west",
+      "annualRecurringRevenue": 36000
+    },
+    {
+      "accountId": "acct_01J9X8K2M4N6P8Q0R2S7",
+      "externalCrmId": "sf_0018Z00002X9HLOS",
+      "name": "Helios Cloud Retail",
+      "primaryEmail": "sre@heliosretail.example",
+      "tier": "ENTERPRISE",
+      "status": "PAST_DUE",
+      "region": "ap-south",
+      "annualRecurringRevenue": 960000
+    }
+  ]
+}

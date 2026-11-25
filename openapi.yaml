@@ -1,0 +1,2048 @@
+openapi: 3.1.0
+info:
+  title: Customer Entitlement & Support Case Platform API
+  version: 1.0.0
+  summary: Modular monolith API for customer accounts, entitlements, metered usage, support cases, fixture integrations, audit logs, idempotency, and signed webhooks.
+  description: |
+    Source-of-truth OpenAPI 3.1 contract for the Customer Entitlement & Support Case Platform.
+
+    ### Cross-Cutting Guarantees
+    - **Errors**: All 4xx/5xx responses conform to **RFC 9457 Problem Details for HTTP APIs** (`application/problem+json`).
+    - **Authentication & Authorization**: OAuth 2.0 Bearer JWT tokens enforcing fine-grained scopes per operation (`POST /oauth/token` issues signed local/test tokens via `client_credentials`).
+    - **Idempotency**: Mutating `POST` endpoints accept `Idempotency-Key` (UUID/string, 8-128 chars). Replays with identical payload return the stored status and body with `Idempotency-Replayed: true`. Reusing a key with a different payload returns `409 Conflict` (`application/problem+json`).
+    - **Optimistic Concurrency**: Mutable resources expose `version` and `ETag: "v{version}"`. `PATCH` requests require `If-Match`; missing header yields `428 Precondition Required`, stale version yields `412 Precondition Failed`.
+    - **Pagination**: Collection endpoints use opaque base64url cursor pagination (`cursor`, `limit`).
+    - **Webhooks**: Outbound events are persisted in a transactional delivery log and signed using HMAC-SHA256 (`X-Webhook-Signature: t=<unix_ts>,v1=<hex_hmac>`).
+    - **MCP Boundary**: The separate stdio MCP server delegates authorization to this API and forwards the user's bearer token unchanged; MCP escalation requires explicit human approval.
+
+servers:
+  - url: http://localhost:3000
+    description: Local Fastify server
+
+tags:
+  - name: Auth
+    description: OAuth 2.0 client_credentials token issuance for local/testing workflows
+  - name: Health
+    description: Liveness and readiness probes
+  - name: Customers
+    description: Customer account lifecycle and profile management
+  - name: Entitlements
+    description: Contract entitlements, quotas, support tiers, and policy evaluation
+  - name: Usage
+    description: Metered feature usage ingestion and quota aggregation
+  - name: Cases
+    description: Entitlement-aware support case lifecycle and comments
+  - name: Integrations
+    description: Consistent JSON, CSV, and XML fixture synchronization
+  - name: Audit
+    description: Append-only audit event queries
+  - name: Webhooks
+    description: Webhook endpoint subscriptions and signed event deliveries
+
+security:
+  - oauth2: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Service health and SQLite connectivity check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /oauth/token:
+    post:
+      tags: [Auth]
+      operationId: issueOAuthToken
+      summary: Issue signed OAuth 2.0 Bearer access token (client_credentials)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Signed JWT access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestProblem'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+
+  /v1/customers:
+    get:
+      tags: [Customers]
+      operationId: listCustomers
+      summary: List customer accounts with cursor pagination
+      security:
+        - oauth2: [customers:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CustomerStatus'
+        - name: tier
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CustomerTier'
+      responses:
+        '200':
+          description: Paginated list of customer accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create a customer account
+      security:
+        - oauth2: [customers:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '201':
+          description: Customer created
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequestProblem'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/customers/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Retrieve customer account by canonical accountId
+      security:
+        - oauth2: [customers:read]
+      responses:
+        '200':
+          description: Customer details
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerOverview'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+    patch:
+      tags: [Customers]
+      operationId: updateCustomer
+      summary: Update customer account with If-Match optimistic concurrency
+      security:
+        - oauth2: [customers:write]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+      responses:
+        '200':
+          description: Customer updated
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequestProblem'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailedProblem'
+        '428':
+          $ref: '#/components/responses/PreconditionRequiredProblem'
+
+  /v1/entitlements:
+    get:
+      tags: [Entitlements]
+      operationId: listEntitlements
+      summary: List entitlements with cursor pagination
+      security:
+        - oauth2: [entitlements:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: featureCode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EntitlementStatus'
+      responses:
+        '200':
+          description: Paginated list of entitlements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntitlementListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+    post:
+      tags: [Entitlements]
+      operationId: createEntitlement
+      summary: Grant an entitlement to a customer account
+      security:
+        - oauth2: [entitlements:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEntitlementRequest'
+      responses:
+        '201':
+          description: Entitlement created
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entitlement'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/entitlements/evaluate:
+    post:
+      tags: [Entitlements]
+      operationId: evaluateEntitlement
+      summary: Evaluate whether a customer account is entitled to a feature, quota increment, or support severity
+      security:
+        - oauth2: [entitlements:read]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluateEntitlementRequest'
+      responses:
+        '200':
+          description: Entitlement policy decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluateEntitlementResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/entitlements/{entitlementId}:
+    parameters:
+      - name: entitlementId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Entitlements]
+      operationId: getEntitlement
+      summary: Get an entitlement by ID
+      security:
+        - oauth2: [entitlements:read]
+      responses:
+        '200':
+          description: Entitlement details
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entitlement'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+    patch:
+      tags: [Entitlements]
+      operationId: updateEntitlement
+      summary: Update entitlement limits, status, or window with If-Match concurrency
+      security:
+        - oauth2: [entitlements:write]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEntitlementRequest'
+      responses:
+        '200':
+          description: Entitlement updated
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entitlement'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailedProblem'
+        '428':
+          $ref: '#/components/responses/PreconditionRequiredProblem'
+
+  /v1/usage/events:
+    get:
+      tags: [Usage]
+      operationId: listUsageEvents
+      summary: List metered usage events with cursor pagination
+      security:
+        - oauth2: [usage:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: metricCode
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated usage events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageEventListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+    post:
+      tags: [Usage]
+      operationId: recordUsageEvent
+      summary: Record a metered usage event and evaluate quota thresholds
+      security:
+        - oauth2: [usage:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUsageEventRequest'
+      responses:
+        '201':
+          description: Usage event ingested
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageIngestResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/usage/summary:
+    get:
+      tags: [Usage]
+      operationId: getUsageSummary
+      summary: Aggregate usage vs entitled quotas for an account
+      security:
+        - oauth2: [usage:read]
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: metricCode
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aggregated usage summary per metric
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummaryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestProblem'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+
+  /v1/cases:
+    get:
+      tags: [Cases]
+      operationId: listCases
+      summary: List support cases with cursor pagination
+      security:
+        - oauth2: [cases:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CaseStatus'
+        - name: severity
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CaseSeverity'
+        - name: assigneeId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Case-number, subject, and description search text
+          schema:
+            type: string
+        - name: createdAfter
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: createdBefore
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: sort
+          in: query
+          required: false
+          description: Sort field; prefix with `-` for descending order
+          schema:
+            type: string
+            enum: [createdAt, -createdAt, updatedAt, -updatedAt, slaResponseDueAt, -slaResponseDueAt, severity, -severity]
+            default: -createdAt
+      responses:
+        '200':
+          description: Paginated support cases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+    post:
+      tags: [Cases]
+      operationId: createCase
+      summary: Open a support case after verifying customer status and support entitlement
+      security:
+        - oauth2: [cases:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCaseRequest'
+      responses:
+        '201':
+          description: Support case opened with computed SLA response target
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportCase'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/cases/{caseId}:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Cases]
+      operationId: getCase
+      summary: Retrieve support case and comments
+      security:
+        - oauth2: [cases:read]
+      responses:
+        '200':
+          description: Support case details
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportCaseDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+    patch:
+      tags: [Cases]
+      operationId: updateCase
+      summary: Update case status, severity, or assignee with If-Match concurrency
+      security:
+        - oauth2: [cases:write]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCaseRequest'
+      responses:
+        '200':
+          description: Support case updated
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportCase'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailedProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+        '428':
+          $ref: '#/components/responses/PreconditionRequiredProblem'
+
+  /v1/cases/{caseId}/comments:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: addCaseComment
+      summary: Append a comment to an existing support case
+      security:
+        - oauth2: [cases:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCaseCommentRequest'
+      responses:
+        '201':
+          description: Comment created
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseComment'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+
+  /v1/integrations/fixtures/sync:
+    post:
+      tags: [Integrations]
+      operationId: syncFixtures
+      summary: Parse, cross-validate, and idempotently synchronize JSON, XML, and CSV fixtures
+      security:
+        - oauth2: [integrations:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncFixturesRequest'
+      responses:
+        '200':
+          description: Fixtures synchronized across JSON, XML, and CSV sources
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncFixturesResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/integrations/sync-runs:
+    get:
+      tags: [Integrations]
+      operationId: listIntegrationSyncRuns
+      summary: List historical fixture/integration sync runs
+      security:
+        - oauth2: [integrations:write]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Paginated sync runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationSyncRunListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+
+  /v1/audit/events:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: List immutable audit trail events with cursor pagination
+      security:
+        - oauth2: [audit:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+
+  /v1/webhooks/endpoints:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookEndpoints
+      summary: List registered webhook endpoints
+      security:
+        - oauth2: [webhooks:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Paginated webhook subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+    post:
+      tags: [Webhooks]
+      operationId: createWebhookEndpoint
+      summary: Register a webhook subscription endpoint
+      security:
+        - oauth2: [webhooks:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookEndpointRequest'
+      responses:
+        '201':
+          description: Webhook endpoint registered (returns signing secret on creation)
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointCreated'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+
+  /v1/webhooks/deliveries:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookDeliveries
+      summary: List outbound webhook deliveries and signature metadata
+      security:
+        - oauth2: [webhooks:read]
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: endpointId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: eventType
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WebhookEventType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WebhookDeliveryStatus'
+      responses:
+        '200':
+          description: Paginated webhook deliveries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+
+  /v1/webhooks/deliveries/{deliveryId}/dispatch:
+    parameters:
+      - name: deliveryId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: dispatchWebhookDelivery
+      summary: Attempt or retry a webhook event unless already delivered
+      description: Failed and pending deliveries may be retried; an already-delivered record is returned unchanged and is not sent again.
+      security:
+        - oauth2: [webhooks:write]
+      responses:
+        '200':
+          description: Delivery attempt completed and recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDelivery'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+
+webhooks:
+  platformEvent:
+    post:
+      operationId: receivePlatformWebhook
+      summary: Signed outbound webhook event delivered to subscriber URLs
+      description: |
+        Subscribers verify authenticity by computing `HMAC_SHA256(secret, "${timestamp}.${rawJsonBody}")`
+        and comparing in constant time against `v1` in `X-Webhook-Signature: t=<timestamp>,v1=<hex>`.
+        Delivery is at-least-once: consumers must enforce timestamp freshness and persistently deduplicate
+        `X-Webhook-Id` before applying side effects. This API does not expose an inbound webhook receiver.
+      parameters:
+        - name: X-Webhook-Id
+          in: header
+          required: true
+          description: Unique delivery identifier
+          schema:
+            type: string
+        - name: X-Webhook-Event
+          in: header
+          required: true
+          description: Event type identifier
+          schema:
+            $ref: '#/components/schemas/WebhookEventType'
+        - name: X-Webhook-Timestamp
+          in: header
+          required: true
+          description: Unix epoch seconds used in HMAC signature input
+          schema:
+            type: integer
+        - name: X-Webhook-Signature
+          in: header
+          required: true
+          description: Formatted as `t=<epoch_seconds>,v1=<hex_hmac_sha256>`
+          schema:
+            type: string
+            example: t=1764045600,v1=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEventEnvelope'
+      responses:
+        '200':
+          description: Subscriber acknowledged receipt with any 2xx status code
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: OAuth 2.0 Bearer JWT with granular resource scopes
+      flows:
+        clientCredentials:
+          tokenUrl: /oauth/token
+          scopes:
+            customers:read: Read customer accounts
+            customers:write: Create and update customer accounts
+            entitlements:read: Read and evaluate customer entitlements
+            entitlements:write: Grant and modify entitlements
+            usage:read: Read metered usage events and quota summaries
+            usage:write: Ingest metered usage events
+            cases:read: Read support cases and comments
+            cases:write: Create, update, and comment on support cases
+            integrations:write: Trigger fixture synchronization and inspect sync runs
+            audit:read: Read immutable audit log entries
+            webhooks:read: Read webhook endpoints and delivery logs
+            webhooks:write: Register webhook endpoints and trigger delivery attempts
+
+  parameters:
+    AccountIdPath:
+      name: accountId
+      in: path
+      required: true
+      description: Canonical customer account ID (e.g. `acct_01J9X8K2M4N6P8Q0R2S4`)
+      schema:
+        type: string
+        pattern: '^acct_[A-Za-z0-9_-]{6,64}$'
+    CursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque pagination cursor returned in `page.nextCursor`
+      schema:
+        type: string
+    LimitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum items per page (1-100, default 20)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-generated unique key (8-128 chars) guaranteeing safe retries for mutating POST operations
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    IfMatchHeader:
+      name: If-Match
+      in: header
+      required: true
+      description: Expected entity ETag (`"v1"`, `"v2"`, etc.) for optimistic concurrency control
+      schema:
+        type: string
+        example: '"v1"'
+
+  headers:
+    ETagHeader:
+      description: Entity version tag for optimistic concurrency (`"v{version}"`)
+      schema:
+        type: string
+        example: '"v1"'
+    IdempotencyReplayedHeader:
+      description: "`true` when response was replayed from an earlier completed `Idempotency-Key` execution"
+      schema:
+        type: boolean
+        example: false
+
+  responses:
+    BadRequestProblem:
+      description: Malformed request syntax or invalid query/header parameter (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    UnauthorizedProblem:
+      description: Missing, expired, or invalid Bearer token (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ForbiddenProblem:
+      description: Insufficient OAuth scope or policy denial (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    NotFoundProblem:
+      description: Requested resource does not exist (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ConflictProblem:
+      description: Unique constraint violation or Idempotency-Key conflict (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    PreconditionFailedProblem:
+      description: If-Match ETag does not match current entity version (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    UnprocessableProblem:
+      description: Domain rule or validation failure (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    PreconditionRequiredProblem:
+      description: Missing required If-Match header on conditional update (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+  schemas:
+    ProblemDetails:
+      type: object
+      description: RFC 9457 Problem Details object
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://api.platform.local/problems/entitlement-denied
+        title:
+          type: string
+          example: Entitlement Policy Denied
+        status:
+          type: integer
+          example: 422
+        detail:
+          type: string
+          example: Account acct_01J9X8K2M4N6P8Q0R2S6 is SUSPENDED and cannot open new support cases.
+        instance:
+          type: string
+          example: /v1/cases
+        code:
+          type: string
+          example: ACCOUNT_SUSPENDED
+        traceId:
+          type: string
+          example: req_01J9X9Z0A2B4
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    PageMeta:
+      type: object
+      required: [nextCursor, hasMore, limit]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    HealthResponse:
+      type: object
+      required: [status, database, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        database:
+          type: string
+          enum: [up]
+        timestamp:
+          type: string
+          format: date-time
+
+    TokenRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        client_id:
+          type: string
+          example: platform-admin-client
+        client_secret:
+          type: string
+          example: dev-secret-platform-admin
+        scope:
+          type: string
+          description: Space-delimited list of requested OAuth scopes
+          example: customers:read customers:write entitlements:read cases:write
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          example: 3600
+        scope:
+          type: string
+
+    CustomerStatus:
+      type: string
+      enum: [ACTIVE, PAST_DUE, SUSPENDED, CHURNED]
+
+    CustomerTier:
+      type: string
+      enum: [STARTER, BUSINESS, ENTERPRISE]
+
+    Customer:
+      type: object
+      required:
+        - accountId
+        - name
+        - primaryEmail
+        - tier
+        - status
+        - region
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        accountId:
+          type: string
+          example: acct_01J9X8K2M4N6P8Q0R2S4
+        name:
+          type: string
+          example: Acme Global Logistics
+        primaryEmail:
+          type: string
+          format: email
+          example: ops@acmelogistics.example
+        tier:
+          $ref: '#/components/schemas/CustomerTier'
+        status:
+          $ref: '#/components/schemas/CustomerStatus'
+        externalCrmId:
+          type: [string, 'null']
+          example: sf_0018Z00002X9abc
+        region:
+          type: string
+          example: us-east
+        annualRecurringRevenue:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 2000000000
+          description: Whole USD; returned only with customers:arr:read
+          x-required-scope: customers:arr:read
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateCustomerRequest:
+      type: object
+      required: [accountId, name, primaryEmail, tier]
+      properties:
+        accountId:
+          type: string
+          pattern: '^acct_[A-Za-z0-9_-]{6,64}$'
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        primaryEmail:
+          type: string
+          format: email
+        tier:
+          $ref: '#/components/schemas/CustomerTier'
+        status:
+          $ref: '#/components/schemas/CustomerStatus'
+          default: ACTIVE
+        externalCrmId:
+          type: string
+        region:
+          type: string
+          default: us-east
+        annualRecurringRevenue:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+          description: Whole USD; writable only with customers:arr:write
+          x-required-scope: customers:arr:write
+
+    UpdateCustomerRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        primaryEmail:
+          type: string
+          format: email
+        tier:
+          $ref: '#/components/schemas/CustomerTier'
+        status:
+          $ref: '#/components/schemas/CustomerStatus'
+        region:
+          type: string
+        annualRecurringRevenue:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 2000000000
+          description: Whole USD; writable only with customers:arr:write
+          x-required-scope: customers:arr:write
+
+    CustomerListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    CustomerOverview:
+      allOf:
+        - $ref: '#/components/schemas/Customer'
+        - type: object
+          required: [entitlements, usage, cases, generatedAt, partialFailures]
+          properties:
+            entitlements:
+              type: [array, 'null']
+              description: Available with entitlements:read; null when unauthorized or the section fails.
+              items:
+                $ref: '#/components/schemas/Entitlement'
+            usage:
+              description: Available with usage:read; null when unauthorized or the section fails.
+              oneOf:
+                - $ref: '#/components/schemas/UsageSummaryResponse'
+                - type: 'null'
+            cases:
+              type: [array, 'null']
+              description: Available with cases:read; null when unauthorized or the section fails.
+              items:
+                $ref: '#/components/schemas/SupportCase'
+            generatedAt:
+              type: string
+              format: date-time
+            partialFailures:
+              type: array
+              items:
+                type: object
+                required: [section, code]
+                properties:
+                  section:
+                    type: string
+                    enum: [entitlements, usage, cases]
+                  code:
+                    type: string
+                    enum: [SECTION_UNAVAILABLE, SECTION_FORBIDDEN]
+
+    EntitlementKind:
+      type: string
+      enum: [BOOLEAN_FEATURE, METERED_QUOTA, SUPPORT_PLAN]
+
+    EntitlementStatus:
+      type: string
+      enum: [ACTIVE, EXPIRED, REVOKED]
+
+    SupportLevel:
+      type: string
+      enum: [STANDARD, PRIORITY, MISSION_CRITICAL]
+
+    Entitlement:
+      type: object
+      required:
+        - id
+        - accountId
+        - featureCode
+        - kind
+        - status
+        - effectiveFrom
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        contractRef:
+          type: [string, 'null']
+        featureCode:
+          type: string
+          example: API_REQUESTS_MONTHLY
+        kind:
+          $ref: '#/components/schemas/EntitlementKind'
+        status:
+          $ref: '#/components/schemas/EntitlementStatus'
+        quotaLimit:
+          type: [integer, 'null']
+        quotaUnit:
+          type: [string, 'null']
+        supportLevel:
+          oneOf:
+            - $ref: '#/components/schemas/SupportLevel'
+            - type: 'null'
+        maxCaseSeverity:
+          oneOf:
+            - $ref: '#/components/schemas/CaseSeverity'
+            - type: 'null'
+        slaResponseMinutes:
+          type: [integer, 'null']
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateEntitlementRequest:
+      type: object
+      required: [accountId, featureCode, kind, effectiveFrom]
+      properties:
+        accountId:
+          type: string
+        contractRef:
+          type: string
+        featureCode:
+          type: string
+          minLength: 2
+          maxLength: 100
+        kind:
+          $ref: '#/components/schemas/EntitlementKind'
+        status:
+          $ref: '#/components/schemas/EntitlementStatus'
+          default: ACTIVE
+        quotaLimit:
+          type: integer
+          minimum: 0
+        quotaUnit:
+          type: string
+        supportLevel:
+          $ref: '#/components/schemas/SupportLevel'
+        maxCaseSeverity:
+          $ref: '#/components/schemas/CaseSeverity'
+        slaResponseMinutes:
+          type: integer
+          minimum: 5
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: string
+          format: date-time
+
+    UpdateEntitlementRequest:
+      type: object
+      minProperties: 1
+      properties:
+        status:
+          $ref: '#/components/schemas/EntitlementStatus'
+        quotaLimit:
+          type: integer
+          minimum: 0
+        supportLevel:
+          $ref: '#/components/schemas/SupportLevel'
+        maxCaseSeverity:
+          $ref: '#/components/schemas/CaseSeverity'
+        slaResponseMinutes:
+          type: integer
+          minimum: 5
+        effectiveTo:
+          type: [string, 'null']
+          format: date-time
+
+    EntitlementListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entitlement'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    EvaluateEntitlementRequest:
+      type: object
+      required: [accountId, featureCode]
+      properties:
+        accountId:
+          type: string
+        featureCode:
+          type: string
+        requestedQuantity:
+          type: integer
+          minimum: 0
+          default: 1
+        requestedSeverity:
+          $ref: '#/components/schemas/CaseSeverity'
+        at:
+          type: string
+          format: date-time
+
+    EvaluateEntitlementResponse:
+      type: object
+      required: [allowed, reasonCode, detail, accountId, featureCode, evaluatedAt]
+      properties:
+        allowed:
+          type: boolean
+        reasonCode:
+          type: string
+          example: ENTITLED
+        detail:
+          type: string
+        accountId:
+          type: string
+        featureCode:
+          type: string
+        entitlementId:
+          type: [string, 'null']
+        quotaLimit:
+          type: [integer, 'null']
+        currentUsage:
+          type: [integer, 'null']
+        remainingQuota:
+          type: [integer, 'null']
+        supportLevel:
+          oneOf:
+            - $ref: '#/components/schemas/SupportLevel'
+            - type: 'null'
+        slaResponseMinutes:
+          type: [integer, 'null']
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    UsageEvent:
+      type: object
+      required: [id, externalEventId, accountId, metricCode, quantity, source, recordedAt, createdAt]
+      properties:
+        id:
+          type: string
+        externalEventId:
+          type: string
+        accountId:
+          type: string
+        metricCode:
+          type: string
+        quantity:
+          type: integer
+        source:
+          type: string
+        recordedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateUsageEventRequest:
+      type: object
+      required: [externalEventId, accountId, metricCode, quantity]
+      properties:
+        externalEventId:
+          type: string
+          minLength: 3
+          maxLength: 128
+        accountId:
+          type: string
+        metricCode:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        source:
+          type: string
+          default: api
+        recordedAt:
+          type: string
+          format: date-time
+
+    UsageIngestResponse:
+      type: object
+      required: [event, quotaStatus]
+      properties:
+        event:
+          $ref: '#/components/schemas/UsageEvent'
+        quotaStatus:
+          type: object
+          required: [metricCode, currentUsage, quotaLimit, utilizationPct, overQuota]
+          properties:
+            metricCode:
+              type: string
+            currentUsage:
+              type: integer
+            quotaLimit:
+              type: [integer, 'null']
+            utilizationPct:
+              type: [number, 'null']
+            overQuota:
+              type: boolean
+
+    UsageEventListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageEvent'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    UsageMetricSummary:
+      type: object
+      required: [metricCode, totalQuantity, eventCount, quotaLimit, remainingQuota, overQuota]
+      properties:
+        metricCode:
+          type: string
+        totalQuantity:
+          type: integer
+        eventCount:
+          type: integer
+        quotaLimit:
+          type: [integer, 'null']
+        remainingQuota:
+          type: [integer, 'null']
+        overQuota:
+          type: boolean
+
+    UsageSummaryResponse:
+      type: object
+      required: [accountId, generatedAt, metrics]
+      properties:
+        accountId:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageMetricSummary'
+
+    CaseSeverity:
+      type: string
+      enum: [P1, P2, P3, P4]
+
+    CaseStatus:
+      type: string
+      enum: [OPEN, IN_PROGRESS, WAITING_CUSTOMER, ESCALATED, RESOLVED, CLOSED]
+
+    SupportCase:
+      type: object
+      required:
+        - id
+        - caseNumber
+        - accountId
+        - subject
+        - description
+        - severity
+        - status
+        - entitledSupportLevel
+        - slaResponseDueAt
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        caseNumber:
+          type: string
+          example: CASE-000101
+        accountId:
+          type: string
+        entitlementId:
+          type: [string, 'null']
+        subject:
+          type: string
+        description:
+          type: string
+        severity:
+          $ref: '#/components/schemas/CaseSeverity'
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        entitledSupportLevel:
+          $ref: '#/components/schemas/SupportLevel'
+        requesterEmail:
+          type: string
+          format: email
+        assigneeId:
+          type: [string, 'null']
+        slaResponseDueAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, 'null']
+          format: date-time
+        escalatedAt:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CaseComment:
+      type: object
+      required: [id, caseId, authorId, authorRole, body, isInternal, createdAt]
+      properties:
+        id:
+          type: string
+        caseId:
+          type: string
+        authorId:
+          type: string
+        authorRole:
+          type: string
+          enum: [CUSTOMER, AGENT, SYSTEM]
+        body:
+          type: string
+        isInternal:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    SupportCaseDetail:
+      allOf:
+        - $ref: '#/components/schemas/SupportCase'
+        - type: object
+          required: [comments]
+          properties:
+            comments:
+              type: array
+              items:
+                $ref: '#/components/schemas/CaseComment'
+
+    CreateCaseRequest:
+      type: object
+      required: [accountId, subject, description, severity, requesterEmail]
+      properties:
+        accountId:
+          type: string
+        subject:
+          type: string
+          minLength: 5
+          maxLength: 240
+        description:
+          type: string
+          minLength: 10
+          maxLength: 10000
+        severity:
+          $ref: '#/components/schemas/CaseSeverity'
+        requesterEmail:
+          type: string
+          format: email
+
+    UpdateCaseRequest:
+      type: object
+      minProperties: 1
+      properties:
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        severity:
+          $ref: '#/components/schemas/CaseSeverity'
+        assigneeId:
+          type: [string, 'null']
+
+    CreateCaseCommentRequest:
+      type: object
+      required: [authorId, authorRole, body]
+      properties:
+        authorId:
+          type: string
+        authorRole:
+          type: string
+          enum: [CUSTOMER, AGENT, SYSTEM]
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        isInternal:
+          type: boolean
+          default: false
+
+    CaseListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupportCase'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    SyncFixturesRequest:
+      type: object
+      properties:
+        fixturesDir:
+          type: string
+          description: Optional relative fixture directory inside repository (`fixtures` by default)
+          default: fixtures
+
+    SyncFixturesResponse:
+      type: object
+      required:
+        - syncRunId
+        - status
+        - consistentAccountIds
+        - customersUpserted
+        - entitlementsUpserted
+        - usageEventsUpserted
+        - completedAt
+      properties:
+        syncRunId:
+          type: string
+        status:
+          type: string
+          enum: [COMPLETED]
+        consistentAccountIds:
+          type: array
+          items:
+            type: string
+        customersUpserted:
+          type: integer
+        entitlementsUpserted:
+          type: integer
+        usageEventsUpserted:
+          type: integer
+        completedAt:
+          type: string
+          format: date-time
+
+    IntegrationSyncRun:
+      type: object
+      required: [id, sourceSummary, status, customersProcessed, entitlementsProcessed, usageEventsProcessed, startedAt]
+      properties:
+        id:
+          type: string
+        sourceSummary:
+          type: string
+        status:
+          type: string
+          enum: [COMPLETED, FAILED]
+        customersProcessed:
+          type: integer
+        entitlementsProcessed:
+          type: integer
+        usageEventsProcessed:
+          type: integer
+        errorDetail:
+          type: [string, 'null']
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+
+    IntegrationSyncRunListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationSyncRun'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    AuditEvent:
+      type: object
+      required: [id, actorId, actorScopes, action, entityType, entityId, createdAt]
+      properties:
+        id:
+          type: string
+        accountId:
+          type: [string, 'null']
+        actorId:
+          type: string
+        actorScopes:
+          type: string
+        action:
+          type: string
+          example: case.created
+        entityType:
+          type: string
+          example: SupportCase
+        entityId:
+          type: string
+        traceId:
+          type: [string, 'null']
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+
+    AuditEventListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    WebhookEventType:
+      type: string
+      enum:
+        - customer.created
+        - customer.updated
+        - entitlement.created
+        - entitlement.updated
+        - usage.threshold.exceeded
+        - case.created
+        - case.updated
+        - case.escalated
+
+    WebhookEndpoint:
+      type: object
+      required: [id, url, subscribedEvents, active, version, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        description:
+          type: [string, 'null']
+        subscribedEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEventType'
+        active:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    WebhookEndpointCreated:
+      allOf:
+        - $ref: '#/components/schemas/WebhookEndpoint'
+        - type: object
+          required: [signingSecret]
+          properties:
+            signingSecret:
+              type: string
+              description: Returned once on creation for HMAC-SHA256 verification
+
+    CreateWebhookEndpointRequest:
+      type: object
+      required: [url, subscribedEvents]
+      properties:
+        url:
+          type: string
+          format: uri
+        description:
+          type: string
+        subscribedEvents:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/WebhookEventType'
+        signingSecret:
+          type: string
+          minLength: 16
+          maxLength: 128
+
+    WebhookEndpointListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEndpoint'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    WebhookDeliveryStatus:
+      type: string
+      enum: [PENDING, DELIVERED, FAILED]
+
+    WebhookDelivery:
+      type: object
+      required: [id, endpointId, eventType, status, signatureHeader, attemptCount, payload, createdAt]
+      properties:
+        id:
+          type: string
+        endpointId:
+          type: string
+        eventType:
+          $ref: '#/components/schemas/WebhookEventType'
+        accountId:
+          type: [string, 'null']
+        status:
+          $ref: '#/components/schemas/WebhookDeliveryStatus'
+        signatureHeader:
+          type: string
+        attemptCount:
+          type: integer
+        responseStatus:
+          type: [integer, 'null']
+        lastError:
+          type: [string, 'null']
+        payload:
+          $ref: '#/components/schemas/WebhookEventEnvelope'
+        deliveredAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    WebhookDeliveryListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+
+    WebhookEventEnvelope:
+      type: object
+      required: [id, specVersion, type, occurredAt, data]
+      properties:
+        id:
+          type: string
+        specVersion:
+          type: string
+          enum: ['1.0']
+        type:
+          $ref: '#/components/schemas/WebhookEventType'
+        accountId:
+          type: [string, 'null']
+        occurredAt:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true

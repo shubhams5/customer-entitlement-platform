@@ -1,0 +1,224 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id                     String   @id @default(cuid())
+  accountId              String   @unique
+  name                   String
+  primaryEmail           String
+  tier                   String
+  status                 String   @default("ACTIVE")
+  externalCrmId          String?  @unique
+  region                 String   @default("us-east")
+  /// Annual recurring revenue in whole USD. Field-level authorization applies.
+  annualRecurringRevenue Int?
+  version                Int      @default(1)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  entitlements Entitlement[]
+  usageEvents  UsageEvent[]
+  cases        SupportCase[]
+
+  @@index([status, tier])
+}
+
+model Entitlement {
+  id                 String    @id @default(cuid())
+  externalId         String?   @unique
+  accountId          String
+  contractRef        String?
+  featureCode        String
+  kind               String
+  status             String    @default("ACTIVE")
+  quotaLimit         Int?
+  quotaUnit          String?
+  supportLevel       String?
+  maxCaseSeverity    String?
+  slaResponseMinutes Int?
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  version            Int       @default(1)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  customer Customer      @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+  cases    SupportCase[]
+
+  @@index([accountId, featureCode, status])
+}
+
+model UsageEvent {
+  id              String   @id @default(cuid())
+  externalEventId String   @unique
+  accountId       String
+  metricCode      String
+  quantity        Int
+  source          String   @default("api")
+  recordedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  customer Customer @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+
+  @@index([accountId, metricCode, recordedAt])
+}
+
+model SupportCase {
+  id                   String    @id @default(cuid())
+  caseNumber           String    @unique
+  accountId            String
+  entitlementId        String?
+  subject              String
+  description          String
+  severity             String
+  status               String    @default("OPEN")
+  entitledSupportLevel String
+  requesterEmail       String
+  assigneeId           String?
+  slaResponseDueAt     DateTime
+  resolvedAt           DateTime?
+  escalatedAt          DateTime?
+  escalationReason     String?
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  customer    Customer      @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+  entitlement Entitlement?  @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
+  comments    CaseComment[]
+
+  @@index([accountId, status, severity])
+  @@index([createdAt, id])
+  @@index([updatedAt, id])
+  @@index([slaResponseDueAt, id])
+  @@index([severity, id])
+}
+
+model CaseComment {
+  id             String   @id @default(cuid())
+  caseId         String
+  authorId       String
+  authorRole     String
+  body           String
+  isInternal     Boolean  @default(false)
+  /// Client Idempotency-Key; unique per case so crash-window retries cannot duplicate comments.
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+
+  supportCase SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, idempotencyKey])
+  @@index([caseId])
+}
+
+model IntegrationSyncRun {
+  id                    String    @id @default(cuid())
+  sourceSummary         String
+  status                String
+  customersProcessed    Int       @default(0)
+  entitlementsProcessed Int       @default(0)
+  usageEventsProcessed  Int       @default(0)
+  errorDetail           String?
+  startedAt             DateTime  @default(now())
+  completedAt           DateTime?
+}
+
+model AuditEvent {
+  id           String   @id @default(cuid())
+  accountId    String?
+  actorId      String
+  actorScopes  String
+  action       String
+  entityType   String
+  entityId     String
+  traceId      String?
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  @@index([accountId])
+  @@index([entityType, entityId])
+}
+
+model IdempotencyRecord {
+  id             String    @id @default(cuid())
+  key            String
+  method         String
+  routePath      String
+  actorId        String
+  requestHash    String
+  status         String
+  responseStatus Int?
+  responseBody   String?
+  responseEtag   String?
+  lockExpiresAt  DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([key, method, routePath, actorId])
+  @@index([expiresAt])
+}
+
+model WebhookEndpoint {
+  id                   String   @id @default(cuid())
+  url                  String
+  description          String?
+  signingSecret        String
+  subscribedEventsJson String
+  active               Boolean  @default(true)
+  version              Int      @default(1)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+}
+
+/// Transactional outbox: one row per domain event, written in the same
+/// transaction as the state change that produced it.
+model OutboxEvent {
+  id            String   @id
+  eventType     String
+  accountId     String?
+  payloadJson   String
+  correlationId String?
+  createdAt     DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([eventType, createdAt])
+}
+
+model WebhookDelivery {
+  id              String    @id @default(cuid())
+  endpointId      String
+  outboxEventId   String?
+  eventType       String
+  accountId       String?
+  status          String    @default("PENDING")
+  signatureHeader String
+  timestampHeader Int
+  payloadJson     String
+  attemptCount    Int       @default(0)
+  responseStatus  Int?
+  lastError       String?
+  nextAttemptAt   DateTime?
+  lockedUntil     DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  endpoint    WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  outboxEvent OutboxEvent?    @relation(fields: [outboxEventId], references: [id], onDelete: SetNull)
+
+  @@unique([outboxEventId, endpointId])
+  @@index([endpointId, status])
+  @@index([status, nextAttemptAt])
+  @@index([eventType])
+}

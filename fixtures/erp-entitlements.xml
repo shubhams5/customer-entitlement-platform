@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EntitlementCatalog sourceSystem="netsuite-erp" exportedAt="2026-11-25T04:05:00Z">
+  <AccountContract accountId="acct_01J9X8K2M4N6P8Q0R2S4" contractRef="CNT-2026-ACME-01">
+    <Entitlement id="ent_erp_acme_support" kind="SUPPORT_PLAN" status="ACTIVE">
+      <FeatureCode>SUPPORT_PORTAL</FeatureCode>
+      <SupportLevel>MISSION_CRITICAL</SupportLevel>
+      <MaxCaseSeverity>P1</MaxCaseSeverity>
+      <SlaResponseMinutes>15</SlaResponseMinutes>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_acme_api" kind="METERED_QUOTA" status="ACTIVE">
+      <FeatureCode>API_REQUESTS_MONTHLY</FeatureCode>
+      <QuotaLimit unit="requests">1000000</QuotaLimit>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_acme_sso" kind="BOOLEAN_FEATURE" status="ACTIVE">
+      <FeatureCode>ENTERPRISE_SSO</FeatureCode>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+  </AccountContract>
+
+  <AccountContract accountId="acct_01J9X8K2M4N6P8Q0R2S5" contractRef="CNT-2026-NSTAR-02">
+    <Entitlement id="ent_erp_nstar_support" kind="SUPPORT_PLAN" status="ACTIVE">
+      <FeatureCode>SUPPORT_PORTAL</FeatureCode>
+      <SupportLevel>PRIORITY</SupportLevel>
+      <MaxCaseSeverity>P2</MaxCaseSeverity>
+      <SlaResponseMinutes>60</SlaResponseMinutes>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_nstar_api" kind="METERED_QUOTA" status="ACTIVE">
+      <FeatureCode>API_REQUESTS_MONTHLY</FeatureCode>
+      <QuotaLimit unit="requests">100000</QuotaLimit>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_nstar_seats" kind="METERED_QUOTA" status="ACTIVE">
+      <FeatureCode>AGENT_SEATS</FeatureCode>
+      <QuotaLimit unit="seats">25</QuotaLimit>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+  </AccountContract>
+
+  <AccountContract accountId="acct_01J9X8K2M4N6P8Q0R2S6" contractRef="CNT-2025-VELOX-09">
+    <Entitlement id="ent_erp_velox_support" kind="SUPPORT_PLAN" status="ACTIVE">
+      <FeatureCode>SUPPORT_PORTAL</FeatureCode>
+      <SupportLevel>STANDARD</SupportLevel>
+      <MaxCaseSeverity>P3</MaxCaseSeverity>
+      <SlaResponseMinutes>480</SlaResponseMinutes>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_velox_api" kind="METERED_QUOTA" status="ACTIVE">
+      <FeatureCode>API_REQUESTS_MONTHLY</FeatureCode>
+      <QuotaLimit unit="requests">10000</QuotaLimit>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_velox_audit" kind="BOOLEAN_FEATURE" status="EXPIRED">
+      <FeatureCode>AUDIT_EXPORT</FeatureCode>
+      <EffectiveFrom>2025-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2025-12-31T23:59:59.000Z</EffectiveTo>
+    </Entitlement>
+  </AccountContract>
+
+  <AccountContract accountId="acct_01J9X8K2M4N6P8Q0R2S7" contractRef="CNT-2026-HELIOS-04">
+    <Entitlement id="ent_erp_helios_support" kind="SUPPORT_PLAN" status="ACTIVE">
+      <FeatureCode>SUPPORT_PORTAL</FeatureCode>
+      <SupportLevel>MISSION_CRITICAL</SupportLevel>
+      <MaxCaseSeverity>P1</MaxCaseSeverity>
+      <SlaResponseMinutes>30</SlaResponseMinutes>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+    <Entitlement id="ent_erp_helios_api" kind="METERED_QUOTA" status="ACTIVE">
+      <FeatureCode>API_REQUESTS_MONTHLY</FeatureCode>
+      <QuotaLimit unit="requests">500000</QuotaLimit>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-01T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+  </AccountContract>
+</EntitlementCatalog>

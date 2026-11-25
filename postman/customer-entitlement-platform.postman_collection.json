@@ -1,0 +1,531 @@
+{
+  "info": {
+    "_postman_id": "bd0eb10c-10ad-4bdb-b2de-cc79e5bc7b69",
+    "name": "Customer Entitlement Platform - Functional and Regression",
+    "description": "Sequential smoke and regression checks for public health, OAuth scopes, fixture seeding, customer ARR authorization, case search, idempotent comments, and ETag concurrency. Run against a disposable local/demo database.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Health (public)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.environment.set('runId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Health is public and database is up', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.status).to.eql('ok');",
+              "  pm.expect(body.database).to.eql('up');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "02 - Issue admin token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Admin token issued', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.token_type).to.eql('Bearer');",
+              "  pm.expect(body.access_token).to.be.a('string').and.not.empty;",
+              "  pm.environment.set('adminToken', body.access_token);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{adminClientId}}\",\n  \"client_secret\": \"{{adminClientSecret}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/oauth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["oauth", "token"]
+        }
+      }
+    },
+    {
+      "name": "03 - Issue read-only token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Read-only token issued', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.scope).to.include('customers:read');",
+              "  pm.environment.set('readonlyToken', body.access_token);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{readonlyClientId}}\",\n  \"client_secret\": \"{{readonlyClientSecret}}\",\n  \"scope\": \"customers:read cases:read\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/oauth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["oauth", "token"]
+        }
+      }
+    },
+    {
+      "name": "04 - Issue customer writer without ARR scope",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Limited writer token issued', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.scope).to.eql('customers:read customers:write');",
+              "  pm.environment.set('limitedWriterToken', body.access_token);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{adminClientId}}\",\n  \"client_secret\": \"{{adminClientSecret}}\",\n  \"scope\": \"customers:read customers:write\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/oauth/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["oauth", "token"]
+        }
+      }
+    },
+    {
+      "name": "05 - Seed fixtures",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Fixture sync completed', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.status).to.eql('COMPLETED');",
+              "  pm.expect(body.customersUpserted).to.be.at.least(4);",
+              "  pm.environment.set('accountId', 'acct_01J9X8K2M4N6P8Q0R2S4');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "postman-sync-{{runId}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fixturesDir\": \"fixtures\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/integrations/fixtures/sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "integrations", "fixtures", "sync"]
+        }
+      }
+    },
+    {
+      "name": "06 - Customer summary includes ARR for authorized user",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Authorized customer overview includes ARR', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.accountId).to.eql(pm.environment.get('accountId'));",
+              "  pm.expect(body.annualRecurringRevenue).to.eql(1850000);",
+              "  pm.expect(body.partialFailures).to.be.an('array');",
+              "  pm.environment.set('customerEtag', pm.response.headers.get('ETag'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/customers/{{accountId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "customers", "{{accountId}}"]
+        }
+      }
+    },
+    {
+      "name": "07 - Customer ARR redacted without ARR scope",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ARR is omitted for reader without ARR scope', function () {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(pm.response.json()).not.to.have.property('annualRecurringRevenue');",
+            "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{readonlyToken}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/customers/{{accountId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "customers", "{{accountId}}"]
+        }
+      }
+    },
+    {
+      "name": "08 - ARR write denied without ARR write scope",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ARR update is forbidden to ordinary customer writer', function () {",
+              "  pm.response.to.have.status(403);",
+              "  pm.expect(pm.response.json().code).to.eql('FIELD_WRITE_FORBIDDEN');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{limitedWriterToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "If-Match", "value": "{{customerEtag}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"annualRecurringRevenue\": 1850001\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/customers/{{accountId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "customers", "{{accountId}}"]
+        }
+      }
+    },
+    {
+      "name": "09 - Create case",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Case created with ETag', function () {",
+              "  pm.response.to.have.status(201);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.accountId).to.eql(pm.environment.get('accountId'));",
+              "  pm.environment.set('caseId', body.id);",
+              "  pm.environment.set('caseEtag', pm.response.headers.get('ETag'));",
+              "  pm.expect(pm.environment.get('caseEtag')).to.eql('\"v1\"');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "postman-case-{{runId}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"subject\": \"Postman regression case {{runId}}\",\n  \"description\": \"Created by the Postman functional and regression collection.\",\n  \"severity\": \"P1\",\n  \"requesterEmail\": \"postman-demo@example.test\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases"]
+        }
+      }
+    },
+    {
+      "name": "10 - Filter case search",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Case search applies account/status filters and returns cursor metadata', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.data.some((item) => item.id === pm.environment.get('caseId'))).to.eql(true);",
+              "  pm.expect(body.page).to.have.property('hasMore');",
+              "  pm.expect(body.page).to.have.property('nextCursor');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases?accountId={{accountId}}&status=OPEN&sort=-createdAt&limit=5",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases"],
+          "query": [
+            {"key": "accountId", "value": "{{accountId}}"},
+            {"key": "status", "value": "OPEN"},
+            {"key": "sort", "value": "-createdAt"},
+            {"key": "limit", "value": "5"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "11 - Add idempotent comment",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Comment created', function () {",
+              "  pm.response.to.have.status(201);",
+              "  const body = pm.response.json();",
+              "  pm.environment.set('commentId', body.id);",
+              "  pm.expect(body.caseId).to.eql(pm.environment.get('caseId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "postman-comment-{{runId}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"authorId\": \"postman-agent\",\n  \"authorRole\": \"AGENT\",\n  \"body\": \"Idempotency regression comment {{runId}}\",\n  \"isInternal\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}/comments",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}", "comments"]
+        }
+      }
+    },
+    {
+      "name": "12 - Replay comment with same key",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Comment replay returns original result', function () {",
+              "  pm.response.to.have.status(201);",
+              "  pm.expect(pm.response.headers.get('Idempotency-Replayed')).to.eql('true');",
+              "  pm.expect(pm.response.json().id).to.eql(pm.environment.get('commentId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "postman-comment-{{runId}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"authorId\": \"postman-agent\",\n  \"authorRole\": \"AGENT\",\n  \"body\": \"Idempotency regression comment {{runId}}\",\n  \"isInternal\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}/comments",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}", "comments"]
+        }
+      }
+    },
+    {
+      "name": "13 - Update case with current ETag",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Optimistic update succeeds and advances ETag', function () {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(pm.response.json().status).to.eql('IN_PROGRESS');",
+              "  pm.environment.set('caseEtagV2', pm.response.headers.get('ETag'));",
+              "  pm.expect(pm.environment.get('caseEtagV2')).to.eql('\"v2\"');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "If-Match", "value": "{{caseEtag}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"IN_PROGRESS\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}"]
+        }
+      }
+    },
+    {
+      "name": "14 - Reject stale ETag",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Stale optimistic update is rejected', function () {",
+              "  pm.response.to.have.status(412);",
+              "  pm.expect(pm.response.json().code).to.eql('ETAG_MISMATCH');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "If-Match", "value": "{{caseEtag}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"IN_PROGRESS\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}"]
+        }
+      }
+    },
+    {
+      "name": "15 - Reject unauthorized case write",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Read-only principal cannot update case', function () {",
+              "  pm.response.to.have.status(403);",
+              "  pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_SCOPE');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{readonlyToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "If-Match", "value": "{{caseEtagV2}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"RESOLVED\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}"]
+        }
+      }
+    }
+  ]
+}
