@@ -57,7 +57,7 @@ const searchResultSchema = z.object({
     caseNumber: z.string(),
     accountId: z.string(),
     status: z.enum(['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'ESCALATED', 'RESOLVED', 'CLOSED']),
-    severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
+    severity: z.enum(['P1', 'P2', 'P3', 'P4']),
     version: z.number().int().positive(),
     createdAt: z.iso.datetime(),
     slaResponseDueAt: z.iso.datetime(),

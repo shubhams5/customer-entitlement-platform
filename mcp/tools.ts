@@ -15,7 +15,7 @@ const caseStatuses = [
   'RESOLVED',
   'CLOSED',
 ] as const;
-const caseSeverities = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+const caseSeverities = ['P1', 'P2', 'P3', 'P4'] as const;
 const caseSorts = [
   'createdAt',
   '-createdAt',

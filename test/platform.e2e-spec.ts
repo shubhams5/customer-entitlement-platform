@@ -9,6 +9,13 @@ import { existsSync, rmSync } from 'fs';
 import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { resolve } from 'path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { z } from 'zod';
+import { NestApiClient } from '../mcp/api-client';
+import { assignmentSearchFilters, evaluateAssignmentMatches } from '../mcp/assignment-evaluation';
+import { delegatedIdentityFromToken } from '../mcp/identity';
+import { createPlatformMcpServer } from '../mcp/server';
 import { AppModule } from '../src/app.module';
 import { configureNestFastifyApp } from '../src/bootstrap';
 import { CasesService } from '../src/modules/cases/cases.module';
@@ -331,6 +338,116 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
       { section: 'usage', code: 'SECTION_FORBIDDEN' },
       { section: 'cases', code: 'SECTION_FORBIDDEN' },
     ]);
+  });
+
+  it('searches the ACC-007 P1 fixture through MCP and retrieves its deterministic customer match', async () => {
+    const apiRequests: URL[] = [];
+    const apiFetch: typeof fetch = async (input, init) => {
+      if (init?.method !== 'GET') throw new Error('Assignment MCP integration only expects GET requests.');
+      const url = new URL(String(input));
+      apiRequests.push(url);
+      const response = await app.inject({
+        method: 'GET',
+        url: `${url.pathname}${url.search}`,
+        headers: Object.fromEntries(new Headers(init.headers).entries()),
+      });
+      return new Response(response.payload, {
+        status: response.statusCode,
+        headers: { 'content-type': String(response.headers['content-type'] ?? 'application/json') },
+      });
+    };
+    const identity = delegatedIdentityFromToken(adminToken);
+    const mcpServer = createPlatformMcpServer({
+      api: new NestApiClient('http://api.test', adminToken, apiFetch),
+      identity,
+      audit: () => undefined,
+    });
+    const mcpClient = new Client({ name: 'assignment-integration-test', version: '1.0.0' }, { capabilities: {} });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await mcpServer.connect(serverTransport);
+    await mcpClient.connect(clientTransport);
+
+    try {
+      const asOf = new Date('2026-11-25T00:00:00.000Z');
+      const filters = assignmentSearchFilters(asOf);
+      const oldSeverityAlias = await mcpClient.callTool({
+        name: 'search_cases',
+        arguments: { severity: 'HIGH' },
+      });
+      expect(oldSeverityAlias.isError).toBe(true);
+      expect(apiRequests).toHaveLength(0);
+      const searchSchema = z.object({
+        cases: z.array(z.object({
+          id: z.string(),
+          accountId: z.string(),
+          status: z.string(),
+          severity: z.enum(['P1', 'P2', 'P3', 'P4']),
+          createdAt: z.iso.datetime(),
+        })),
+        nextCursor: z.string().nullable(),
+        hasMore: z.boolean(),
+      });
+      let p1Cases: z.infer<typeof searchSchema>['cases'] = [];
+
+      for (const severity of ['P1', 'P2', 'P3', 'P4'] as const) {
+        const result = await mcpClient.callTool({
+          name: 'search_cases',
+          arguments: { accountId: 'ACC-007', ...filters, severity },
+        });
+        expect(result.isError).not.toBe(true);
+        const page = searchSchema.parse(result.structuredContent);
+        if (severity === 'P1') {
+          p1Cases = page.cases;
+        } else {
+          expect(page.cases).toEqual([]);
+        }
+      }
+
+      expect(p1Cases).toEqual([expect.objectContaining({
+        id: 'case_assignment_acc007_p1',
+        accountId: 'ACC-007',
+        status: 'OPEN',
+        severity: 'P1',
+        createdAt: '2026-10-24T08:12:00.000Z',
+      })]);
+      expect(apiRequests.filter((url) => url.pathname === '/v1/cases').map((url) => url.searchParams.get('severity')))
+        .toEqual(['P1', 'P2', 'P3', 'P4']);
+
+      const summaryResult = await mcpClient.callTool({
+        name: 'get_customer_summary',
+        arguments: { accountId: 'ACC-007' },
+      });
+      expect(summaryResult.isError).not.toBe(true);
+      const customer = z.object({
+        accountId: z.string(),
+        tier: z.string(),
+        entitlementRenewals: z.array(z.object({
+          featureCode: z.string(),
+          renewalDate: z.iso.datetime(),
+        })).nullable(),
+        partialSections: z.array(z.string()),
+      }).parse(summaryResult.structuredContent);
+      expect(customer).toMatchObject({
+        accountId: 'ACC-007',
+        tier: 'Platinum',
+        entitlementRenewals: [{
+          featureCode: 'SUPPORT_PORTAL',
+          renewalDate: '2027-01-15T00:00:00.000Z',
+        }],
+        partialSections: [],
+      });
+      expect(apiRequests.some((url) => url.pathname === '/v1/customers/ACC-007')).toBe(true);
+      expect(evaluateAssignmentMatches(p1Cases, [customer], asOf)).toEqual([{
+        accountId: 'ACC-007',
+        caseId: 'case_assignment_acc007_p1',
+        caseAge: '31d 15h 48m',
+        ageHours: 759.8,
+        renewalDate: '2027-01-15',
+      }]);
+    } finally {
+      await mcpClient.close();
+      await mcpServer.close();
+    }
   });
 
   it('enforces Idempotency-Key replay and 409 conflict on payload mismatch', async () => {
