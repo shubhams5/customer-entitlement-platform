@@ -49,7 +49,7 @@ services:
       NEST_API_BASE_URL: http://api:3000
       MCP_OAUTH_CLIENT_ID: ${MCP_OAUTH_CLIENT_ID:-support-agent-client}
       MCP_OAUTH_CLIENT_SECRET: ${MCP_OAUTH_CLIENT_SECRET:-dev-secret-support-agent}
-      MCP_OAUTH_SCOPES: ${MCP_OAUTH_SCOPES:-customers:read cases:read cases:write}
+      MCP_OAUTH_SCOPES: ${MCP_OAUTH_SCOPES:-customers:read entitlements:read usage:read cases:read cases:write}
       OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-local-dev-hs256-signing-secret-change-in-prod-9f86d081}
       OAUTH_ISSUER: ${OAUTH_ISSUER:-https://auth.platform.local}
       OAUTH_AUDIENCE: ${OAUTH_AUDIENCE:-https://api.platform.local}

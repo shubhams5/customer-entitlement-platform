@@ -14,7 +14,7 @@ Prerequisites: Docker Engine and Docker Compose v2.
    docker compose up --build
    ```
 
-   The one-shot `db-init` container applies migrations and upserts the checked-in JSON/XML/CSV fixtures before the API becomes healthy. MCP starts after API health succeeds.
+   The one-shot `db-init` container applies migrations, upserts the standard JSON/XML/CSV fixtures, then loads `fixtures/assignment-demo/` and its fixed P1 case before the API becomes healthy. MCP starts after API health succeeds.
 
 2. In a second PowerShell window, check health and obtain a local demo token:
 
@@ -34,7 +34,21 @@ Prerequisites: Docker Engine and Docker Compose v2.
      -Headers $headers | ConvertTo-Json -Depth 8
    ```
 
-4. Import `postman/customer-entitlement-platform.postman_collection.json` and `postman/local.postman_environment.json` into Postman, select the local environment, then run the collection for authorization, ARR-redaction, idempotency, case search, and ETag regression checks.
+4. Import `postman/customer-entitlement-platform.postman_collection.json` and `postman/local.postman_environment.json` into Postman, select the local environment, then run the collection for authorization, ARR redaction, idempotency, case search, escalation, and assignment-fixture checks.
+
+5. Optional real-LLM/MCP assignment demo. This sends only local fixture-derived case metadata and customer tier/renewal data to the configured LLM provider. Do not run it against real customer data:
+
+   ```powershell
+   $token = Invoke-RestMethod http://localhost:3000/oauth/token `
+     -Method Post -ContentType 'application/json' `
+     -Body '{"grant_type":"client_credentials","client_id":"support-agent-client","client_secret":"dev-secret-support-agent","scope":"cases:read customers:read entitlements:read usage:read"}'
+   $env:NEST_API_BASE_URL = 'http://localhost:3000'
+   $env:NEST_API_TOKEN = $token.access_token
+   $env:OPENAI_API_KEY = Read-Host 'OpenAI API key'
+   npm run mcp:assignment-demo
+   ```
+
+   The demo uses an as-of date of `2026-11-25T00:00:00.000Z` unless `MCP_DEMO_AS_OF` is set. It reports actual MCP tool calls, the deterministic result, the LLM answer, and a deliberate `ACC-999` not-found tool failure. Configure `MCP_DEMO_LLM_URL` and `MCP_DEMO_LLM_MODEL` for a compatible chat-completions provider.
 
 Stop with `docker compose down`. The named SQLite volume persists. `docker compose down -v` deletes the database and is destructive.
 
@@ -65,7 +79,7 @@ Connect an MCP client using Docker stdio:
 docker compose run --rm -T mcp
 ```
 
-`docker compose run` starts a dedicated MCP process and obtains its short-lived bearer token from the API. The Compose default client is a demo account with only `customers:read`, `cases:read`, and `cases:write`.
+`docker compose run` starts a dedicated MCP process and obtains its short-lived bearer token from the API. The Compose default client receives only `customers:read`, `entitlements:read`, `usage:read`, `cases:read`, and `cases:write`.
 
 ### Local Node.js
 
@@ -80,7 +94,7 @@ npm run db:seed
 npm run start:dev
 ```
 
-Replace `OAUTH_JWT_SECRET` in `.env` before non-demo use. Fixture sync is safe to repeat and updates existing fixture-backed rows.
+Replace `OAUTH_JWT_SECRET` in `.env` before non-demo use. Fixture sync is safe to repeat and updates existing fixture-backed rows. `npm run db:seed` also loads the assignment-specific customer, renewal, and case. Its assignment usage CSV is intentionally header-only because no usage quantities were provided; the API/MCP return an empty metric list rather than fabricated values.
 
 In another terminal, run tests independently of the API process:
 
@@ -163,16 +177,91 @@ Invoke-RestMethod 'http://localhost:3000/v1/cases/{caseId}' `
 
 A stale ETag returns `412 Precondition Failed`; a missing required ETag returns `428 Precondition Required`.
 
+### Explicit case escalation
+
+Escalation is a dedicated idempotent write and requires both `cases:write` and the current `If-Match` ETag:
+
+```powershell
+$escalationHeaders = $headers.Clone()
+$escalationHeaders['If-Match'] = '"v1"'
+$escalationHeaders['Idempotency-Key'] = [guid]::NewGuid().ToString()
+Invoke-RestMethod 'http://localhost:3000/v1/cases/{caseId}/escalate' `
+  -Method Post -Headers $escalationHeaders
+```
+
+The case transition and `case.escalated` outbox event commit together. MCP escalation additionally requires a separate, explicit user approval.
+
+## Assignment demo fixture
+
+`fixtures/assignment-demo/` holds the dedicated `ACC-007` Platinum customer, ERP renewal date (`2027-01-15`), usage CSV header, and the open P1 case opened at `2026-10-24T08:12:00Z`. These inputs produce a `31d 15h 48m` case age at the fixed as-of time. Non-question case fields are fixture scaffolding marked in `case.json`; they are not inferred from customer tier. The reported age and renewal date are calculated from the fixture values.
+
+`npm run mcp:assignment-demo` uses the official MCP TypeScript SDK over stdio, makes real `search_cases` and `get_customer_summary` MCP calls, and uses an OpenAI-compatible chat-completions endpoint for tool selection and the final wording. The script restricts the API URL to localhost, omits PII/ARR/case text from model inputs, checks the exact 48-hour filters, and includes a not-found call for `ACC-999`. A live LLM run requires credentials and is not implied by the local unit tests.
+
+## Local signed webhook receiver
+
+The receiver verifies the HMAC over the exact raw body, rejects timestamps more than five minutes from current time, and stores event IDs in SQLite with a unique key. For a local end-to-end escalation demo:
+
+1. Start the receiver in one PowerShell window:
+
+   ```powershell
+   $env:WEBHOOK_RECEIVER_SECRET = 'whsec_local_receiver_secret_2026'
+   $env:WEBHOOK_RECEIVER_DATABASE_URL = 'file:./webhook-receiver-demo.db'
+   npm run webhook:receiver
+   ```
+
+2. Start the API with the exact local callback URL allowlisted:
+
+   ```powershell
+   $env:WEBHOOK_ALLOWED_PRIVATE_TARGETS = 'http://127.0.0.1:4100/events'
+   npm run start:dev
+   ```
+
+3. In a third window, register the receiver, escalate the seeded case, and dispatch its outbox delivery:
+
+   ```powershell
+   $secret = 'whsec_local_receiver_secret_2026'
+   $token = Invoke-RestMethod http://localhost:3000/oauth/token `
+     -Method Post -ContentType 'application/json' `
+     -Body '{"grant_type":"client_credentials","client_id":"platform-admin-client","client_secret":"dev-secret-platform-admin"}'
+   $headers = @{ Authorization = "Bearer $($token.access_token)" }
+   $endpointHeaders = $headers.Clone()
+   $endpointHeaders['Idempotency-Key'] = [guid]::NewGuid().ToString()
+   $endpointBody = @{
+     url = 'http://127.0.0.1:4100/events'
+     subscribedEvents = @('case.escalated')
+     signingSecret = $secret
+   } | ConvertTo-Json
+   Invoke-RestMethod http://localhost:3000/v1/webhooks/endpoints `
+     -Method Post -Headers $endpointHeaders -ContentType 'application/json' -Body $endpointBody
+
+   $case = Invoke-WebRequest http://localhost:3000/v1/cases/case_assignment_acc007_p1 -Headers $headers
+   $escalationHeaders = $headers.Clone()
+   $escalationHeaders['If-Match'] = $case.Headers.ETag
+   $escalationHeaders['Idempotency-Key'] = [guid]::NewGuid().ToString()
+   Invoke-RestMethod http://localhost:3000/v1/cases/case_assignment_acc007_p1/escalate `
+     -Method Post -Headers $escalationHeaders
+
+   $deliveries = Invoke-RestMethod http://localhost:3000/v1/webhooks/deliveries -Headers $headers
+   $delivery = $deliveries.data | Where-Object eventType -eq 'case.escalated' | Select-Object -First 1
+   Invoke-RestMethod "http://localhost:3000/v1/webhooks/deliveries/$($delivery.id)/dispatch" `
+     -Method Post -Headers $headers
+   ```
+
+   The receiver returns `duplicate: false` for first delivery and `duplicate: true` for a repeated event ID.
+
+The private-target exception is exact-URL scoped and intended only for local demonstrations. Do not configure broad private-network allowlists.
+
 ## Postman checks
 
-The exported collection runs sequentially and creates a P1 case plus a comment in the selected database. It checks:
+The exported collection runs sequentially, syncs the assignment fixture, creates a P1 case plus a comment, updates it, then escalates it in the selected database. It checks:
 
 - Public health and OAuth token issuance.
 - Fixture sync and customer aggregation.
 - ARR read/write scope enforcement.
 - Filtered case search.
+- Platinum renewal and assignment case search.
 - Comment idempotency replay.
-- Successful and stale ETag updates.
+- Successful and stale ETag updates and explicit escalation.
 - Rejection of a write from a read-only token.
 
 Use a disposable local/demo database. The collection does not dispatch outbound webhooks because it does not provision a callback receiver.

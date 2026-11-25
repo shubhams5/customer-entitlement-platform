@@ -55,7 +55,7 @@ async function start(): Promise<void> {
     baseUrl,
     process.env.MCP_OAUTH_CLIENT_ID ?? 'support-agent-client',
     process.env.MCP_OAUTH_CLIENT_SECRET ?? 'dev-secret-support-agent',
-    process.env.MCP_OAUTH_SCOPES ?? 'customers:read cases:read cases:write',
+    process.env.MCP_OAUTH_SCOPES ?? 'customers:read entitlements:read usage:read cases:read cases:write',
   );
   await startMcpServer();
 }

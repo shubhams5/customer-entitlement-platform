@@ -43,6 +43,7 @@ describe('OpenAPI Contract, Fixture Consistency, and Core Primitives', () => {
       '/v1/cases',
       '/v1/cases/{caseId}',
       '/v1/cases/{caseId}/comments',
+      '/v1/cases/{caseId}/escalate',
       '/v1/integrations/fixtures/sync',
       '/v1/integrations/sync-runs',
       '/v1/audit/events',
@@ -61,6 +62,9 @@ describe('OpenAPI Contract, Fixture Consistency, and Core Primitives', () => {
     expect(doc.paths['/v1/cases'].get.parameters.map((p: { name?: string }) => p.name)).toEqual(
       expect.arrayContaining(['assigneeId', 'q', 'createdAfter', 'createdBefore', 'sort']),
     );
+    expect(doc.components.schemas.CustomerTier.enum).toContain('Platinum');
+    expect(doc.components.schemas.CreateCustomerRequest.properties.accountId.pattern).toContain('ACC-');
+    expect(doc.components.schemas.WebhookEventType.enum).toContain('case.escalated');
   });
 
   it('ensures JSON, XML, and CSV fixtures share identical canonical account IDs', () => {
@@ -95,6 +99,47 @@ describe('OpenAPI Contract, Fixture Consistency, and Core Primitives', () => {
     ) as Array<{ account_id: string }>;
     const csvIds = Array.from(new Set(csvRows.map((r) => r.account_id))).sort();
     expect(csvIds).toEqual(jsonIds);
+  });
+
+  it('keeps the assignment demo account and renewal consistent across its fixtures', () => {
+    const assignmentDir = resolve(rootDir, 'fixtures/assignment-demo');
+    const crm = JSON.parse(
+      readFileSync(resolve(assignmentDir, 'crm-customers.json'), 'utf8'),
+    ) as { customers: Array<{ accountId: string; tier: string }> };
+    const assignmentCase = JSON.parse(
+      readFileSync(resolve(assignmentDir, 'case.json'), 'utf8'),
+    ) as { accountId: string; severity: string; status: string; openedAt: string };
+    const xmlParser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+    });
+    const xml = xmlParser.parse(
+      readFileSync(resolve(assignmentDir, 'erp-entitlements.xml'), 'utf8'),
+    ) as {
+      EntitlementCatalog: {
+      AccountContract: {
+        '@_accountId': string;
+        Entitlement: { EffectiveTo: string };
+      } | Array<{
+        '@_accountId': string;
+        Entitlement: { EffectiveTo: string };
+      }>;
+      };
+    };
+    const [customer] = crm.customers;
+    const contracts = Array.isArray(xml.EntitlementCatalog.AccountContract)
+      ? xml.EntitlementCatalog.AccountContract
+      : [xml.EntitlementCatalog.AccountContract];
+    const [contract] = contracts;
+    expect(customer).toMatchObject({ accountId: 'ACC-007', tier: 'Platinum' });
+    expect(assignmentCase).toMatchObject({
+      accountId: customer.accountId,
+      severity: 'P1',
+      status: 'OPEN',
+      openedAt: '2026-10-24T08:12:00.000Z',
+    });
+    expect(contract['@_accountId']).toBe(customer.accountId);
+    expect(contract.Entitlement.EffectiveTo).toBe('2027-01-15T00:00:00.000Z');
   });
 
   it('signs and verifies HS256 OAuth JWTs and rejects tampered or expired tokens', () => {

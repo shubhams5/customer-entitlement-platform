@@ -690,6 +690,51 @@ paths:
         '409':
           $ref: '#/components/responses/ConflictProblem'
 
+  /v1/cases/{caseId}/escalate:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: escalateCase
+      summary: Escalate a support case with If-Match concurrency
+      security:
+        - oauth2: [cases:write]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      responses:
+        '200':
+          description: Support case escalated
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETagHeader'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayedHeader'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportCase'
+        '400':
+          $ref: '#/components/responses/BadRequestProblem'
+        '401':
+          $ref: '#/components/responses/UnauthorizedProblem'
+        '403':
+          $ref: '#/components/responses/ForbiddenProblem'
+        '404':
+          $ref: '#/components/responses/NotFoundProblem'
+        '409':
+          $ref: '#/components/responses/ConflictProblem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailedProblem'
+        '422':
+          $ref: '#/components/responses/UnprocessableProblem'
+        '428':
+          $ref: '#/components/responses/PreconditionRequiredProblem'
+
   /v1/integrations/fixtures/sync:
     post:
       tags: [Integrations]
@@ -1181,7 +1226,7 @@ components:
 
     CustomerTier:
       type: string
-      enum: [STARTER, BUSINESS, ENTERPRISE]
+      enum: [STARTER, BUSINESS, ENTERPRISE, Platinum]
 
     Customer:
       type: object
@@ -1198,6 +1243,7 @@ components:
       properties:
         accountId:
           type: string
+          pattern: '^(acct_[A-Za-z0-9_-]{6,64}|ACC-[0-9]{3})$'
           example: acct_01J9X8K2M4N6P8Q0R2S4
         name:
           type: string
@@ -1238,7 +1284,7 @@ components:
       properties:
         accountId:
           type: string
-          pattern: '^acct_[A-Za-z0-9_-]{6,64}$'
+          pattern: '^(acct_[A-Za-z0-9_-]{6,64}|ACC-[0-9]{3})$'
         name:
           type: string
           minLength: 2

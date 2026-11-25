@@ -48,9 +48,13 @@ export class NestApiClient {
     body: unknown,
     idempotencyKey: string,
     correlationId: string,
+    ifMatch?: string,
   ): Promise<unknown> {
     return this.withSafeRetry(() =>
-      this.request(path, 'POST', body, correlationId, { 'Idempotency-Key': idempotencyKey }),
+      this.request(path, 'POST', body, correlationId, {
+        'Idempotency-Key': idempotencyKey,
+        ...(ifMatch ? { 'If-Match': ifMatch } : {}),
+      }),
     );
   }
 

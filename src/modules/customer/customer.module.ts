@@ -62,7 +62,7 @@ import {
 export const CUSTOMER_STATUSES = ['ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CHURNED'] as const;
 export type CustomerStatus = (typeof CUSTOMER_STATUSES)[number];
 
-export const CUSTOMER_TIERS = ['STARTER', 'BUSINESS', 'ENTERPRISE'] as const;
+export const CUSTOMER_TIERS = ['STARTER', 'BUSINESS', 'ENTERPRISE', 'Platinum'] as const;
 export type CustomerTier = (typeof CUSTOMER_TIERS)[number];
 
 const MAX_ARR = 2_000_000_000;
@@ -79,8 +79,8 @@ export class ListCustomersQueryDto extends PaginationQueryDto {
 
 export class CreateCustomerDto {
   @IsString()
-  @Matches(/^acct_[A-Za-z0-9_-]{6,64}$/, {
-    message: 'accountId must match pattern acct_<6..64 chars>',
+  @Matches(/^(?:acct_[A-Za-z0-9_-]{6,64}|ACC-\d{3})$/, {
+    message: 'accountId must match acct_<6..64 chars> or ACC-<3 digits>',
   })
   accountId: string;
 

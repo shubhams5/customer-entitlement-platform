@@ -51,6 +51,10 @@ export class AppConfig {
   };
 
   readonly webhooks = {
+    allowedPrivateTargets: (process.env.WEBHOOK_ALLOWED_PRIVATE_TARGETS ?? '')
+      .split(',')
+      .map((target) => target.trim())
+      .filter(Boolean),
     timeoutMs: intFromEnv('WEBHOOK_TIMEOUT_MS', 5000),
     maxAttempts: Math.max(1, intFromEnv('WEBHOOK_MAX_ATTEMPTS', 6)),
     retryBaseMs: intFromEnv('WEBHOOK_RETRY_BASE_MS', 30000),

@@ -50,6 +50,11 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
       env: { ...process.env, DATABASE_URL: 'file:./test-e2e.db' },
       stdio: 'pipe',
     });
+    execSync('npx ts-node prisma/seed.ts', {
+      cwd: projectRoot,
+      env: { ...process.env, DATABASE_URL: 'file:./test-e2e.db' },
+      stdio: 'pipe',
+    });
 
     webhookServer = createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -69,6 +74,7 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
     });
     const port = (webhookServer.address() as AddressInfo).port;
     webhookTargetUrl = `http://127.0.0.1:${port}/callbacks`;
+    process.env.WEBHOOK_ALLOWED_PRIVATE_TARGETS = webhookTargetUrl;
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -246,10 +252,20 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
     expect(page2.statusCode).toBe(200);
     const p2Body = page2.json();
     expect(p2Body.data).toHaveLength(2);
-    expect(p2Body.page.hasMore).toBe(false);
+    expect(p2Body.page.hasMore).toBe(true);
 
-    const allIds = [...p1Body.data, ...p2Body.data].map((c: any) => c.accountId);
-    expect(new Set(allIds).size).toBe(4);
+    const page3 = await app.inject({
+      method: 'GET',
+      url: `/v1/customers?limit=2&cursor=${encodeURIComponent(p2Body.page.nextCursor)}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(page3.statusCode).toBe(200);
+    const p3Body = page3.json();
+    expect(p3Body.data).toHaveLength(1);
+    expect(p3Body.page.hasMore).toBe(false);
+
+    const allIds = [...p1Body.data, ...p2Body.data, ...p3Body.data].map((c: any) => c.accountId);
+    expect(new Set(allIds).size).toBe(5);
 
     const badCursor = await app.inject({
       method: 'GET',
@@ -273,6 +289,34 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
       cases: [],
       partialFailures: [],
     });
+    const assignmentOverview = await app.inject({
+      method: 'GET',
+      url: '/v1/customers/ACC-007',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(assignmentOverview.statusCode).toBe(200);
+    expect(assignmentOverview.json()).toMatchObject({
+      accountId: 'ACC-007',
+      tier: 'Platinum',
+      entitlements: [{
+        effectiveTo: '2027-01-15T00:00:00.000Z',
+      }],
+      usage: { metrics: [] },
+    });
+    const assignmentCases = await app.inject({
+      method: 'GET',
+      url: '/v1/cases?accountId=ACC-007&status=OPEN&severity=P1&createdBefore=2026-11-23T00%3A00%3A00.000Z&sort=-createdAt&limit=5',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(assignmentCases.statusCode).toBe(200);
+    expect(assignmentCases.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'case_assignment_acc007_p1',
+        accountId: 'ACC-007',
+        status: 'OPEN',
+        severity: 'P1',
+      }),
+    ]));
 
     const restrictedOverview = await app.inject({
       method: 'GET',
@@ -433,6 +477,19 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
 
   it('evaluates entitlements, enforces case SLA/severity rules, emits & verifies signed webhooks, and records audit trail', async () => {
     // 1. Register webhook subscription for case & usage events
+    const unsafeWebhook = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/endpoints',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {
+        url: `${webhookTargetUrl}/different`,
+        subscribedEvents: ['case.created'],
+        signingSecret: 'whsec_e2e_signing_secret_9876543210',
+      },
+    });
+    expect(unsafeWebhook.statusCode).toBe(400);
+    expect(unsafeWebhook.json().code).toBe('UNSAFE_WEBHOOK_TARGET');
+
     const whCreate = await app.inject({
       method: 'POST',
       url: '/v1/webhooks/endpoints',
@@ -574,6 +631,16 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
     });
     expect(unauthorizedEscalation.statusCode).toBe(403);
     expect(unauthorizedEscalation.json().code).toBe('INSUFFICIENT_SCOPE');
+    const unauthorizedExplicitEscalation = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${limitedWriterToken}`,
+        'if-match': '"v1"',
+      },
+    });
+    expect(unauthorizedExplicitEscalation.statusCode).toBe(403);
+    expect(unauthorizedExplicitEscalation.json().code).toBe('INSUFFICIENT_SCOPE');
 
     const commentRes = await app.inject({
       method: 'POST',
@@ -632,22 +699,90 @@ describe('Customer Entitlement & Support Case Platform (E2E)', () => {
       caseAfterConcurrentComment.json().comments.filter((comment: any) => comment.body === concurrentCommentBody),
     ).toHaveLength(1);
 
-    const escalateRes = await app.inject({
+    const assignRes = await app.inject({
       method: 'PATCH',
       url: `/v1/cases/${createdCase.id}`,
       headers: {
         authorization: `Bearer ${adminToken}`,
         'if-match': '"v1"',
       },
-      payload: {
-        status: 'ESCALATED',
-        assigneeId: 'sre_oncall_lead',
+      payload: { assigneeId: 'sre_oncall_lead' },
+    });
+    expect(assignRes.statusCode).toBe(200);
+    expect(assignRes.headers.etag).toBe('"v2"');
+
+    const missingEscalationPrecondition = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'idempotency-key': 'idem-case-escalate-no-etag-001',
+      },
+    });
+    expect(missingEscalationPrecondition.statusCode).toBe(428);
+
+    const escalateRes = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'if-match': '"v2"',
+        'idempotency-key': 'idem-case-escalate-001',
       },
     });
     expect(escalateRes.statusCode).toBe(200);
-    expect(escalateRes.headers.etag).toBe('"v2"');
+    expect(escalateRes.headers.etag).toBe('"v3"');
     expect(escalateRes.json().status).toBe('ESCALATED');
     expect(escalateRes.json().escalatedAt).toEqual(expect.any(String));
+
+    const replayedEscalation = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'if-match': '"v2"',
+        'idempotency-key': 'idem-case-escalate-001',
+      },
+    });
+    expect(replayedEscalation.statusCode).toBe(200);
+    expect(replayedEscalation.headers['idempotency-replayed']).toBe('true');
+    expect(replayedEscalation.json().id).toBe(escalateRes.json().id);
+
+    const mismatchedEscalationReplay = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'if-match': '"v3"',
+        'idempotency-key': 'idem-case-escalate-001',
+      },
+    });
+    expect(mismatchedEscalationReplay.statusCode).toBe(409);
+    expect(mismatchedEscalationReplay.json().code).toBe('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+
+    const staleEscalation = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'if-match': '"v2"',
+        'idempotency-key': 'idem-case-escalate-stale-001',
+      },
+    });
+    expect(staleEscalation.statusCode).toBe(412);
+    expect(staleEscalation.json().code).toBe('ETAG_MISMATCH');
+
+    const repeatedEscalation = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${createdCase.id}/escalate`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'if-match': '"v3"',
+        'idempotency-key': 'idem-case-escalate-repeat-001',
+      },
+    });
+    expect(repeatedEscalation.statusCode).toBe(422);
+    expect(repeatedEscalation.json().code).toBe('CASE_ALREADY_ESCALATED');
 
     const secondCase = await app.inject({
       method: 'POST',

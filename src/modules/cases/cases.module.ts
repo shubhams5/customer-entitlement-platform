@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Injectable,
   Module,
   Param,
@@ -58,7 +59,7 @@ import {
   parseCaseSort,
   sortValueOf,
 } from './case-search';
-import { assertTransition, statusSideEffects } from './case-workflow';
+import { assertEscalatable, assertTransition, statusSideEffects } from './case-workflow';
 
 export const CASE_STATUSES = [
   'OPEN',
@@ -304,7 +305,11 @@ export class CasesService {
     assertExpectedVersion(expectedVersion, current.version);
 
     if (dto.status !== undefined) {
-      assertTransition(caseId, current.status as CaseStatus, dto.status);
+      if (dto.status === 'ESCALATED') {
+        assertEscalatable(caseId, current.status as CaseStatus);
+      } else {
+        assertTransition(caseId, current.status as CaseStatus, dto.status);
+      }
     }
 
     if (dto.severity && dto.severity !== current.severity) {
@@ -540,6 +545,26 @@ export class CasesController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const updated = await this.casesService.update(caseId, dto, ifMatch, actor);
+    reply.header('etag', formatEtag(updated.version));
+    return updated;
+  }
+
+  @Post(':caseId/escalate')
+  @HttpCode(200)
+  @RequireScopes('cases:write')
+  @Idempotent()
+  async escalateCase(
+    @Param('caseId') caseId: string,
+    @Headers('if-match') ifMatch: string | undefined,
+    @CurrentActor() actor: ActorContext,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    const updated = await this.casesService.update(
+      caseId,
+      { status: 'ESCALATED' },
+      ifMatch,
+      actor,
+    );
     reply.header('etag', formatEtag(updated.version));
     return updated;
   }

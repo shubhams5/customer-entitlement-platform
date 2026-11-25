@@ -28,7 +28,7 @@ const caseSorts = [
 ] as const;
 
 const searchInput = z.object({
-  accountId: z.string().regex(/^acct_[A-Za-z0-9_-]{6,64}$/).optional(),
+  accountId: z.string().regex(/^(?:acct_[A-Za-z0-9_-]{6,64}|ACC-\d{3})$/).optional(),
   status: z.enum(caseStatuses).optional(),
   severity: z.enum(caseSeverities).optional(),
   assigneeId: z.string().min(1).max(100).optional(),
@@ -44,6 +44,7 @@ const searchOutput = z.object({
   cases: z.array(z.object({
     id: z.string(),
     caseNumber: z.string(),
+    accountId: z.string(),
     status: z.enum(caseStatuses),
     severity: z.enum(caseSeverities),
     version: z.number().int().positive(),
@@ -55,16 +56,28 @@ const searchOutput = z.object({
 }).strict();
 
 const customerInput = z.object({
-  accountId: z.string().regex(/^acct_[A-Za-z0-9_-]{6,64}$/),
+  accountId: z.string().regex(/^(?:acct_[A-Za-z0-9_-]{6,64}|ACC-\d{3})$/),
 }).strict();
 
 const customerOutput = z.object({
   accountId: z.string(),
   status: z.enum(['ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CHURNED']),
-  tier: z.enum(['STARTER', 'BUSINESS', 'ENTERPRISE']),
+  tier: z.enum(['STARTER', 'BUSINESS', 'ENTERPRISE', 'Platinum']),
   version: z.number().int().positive(),
   entitlementCount: z.number().int().nonnegative().nullable(),
+  entitlementRenewals: z.array(z.object({
+    featureCode: z.string(),
+    renewalDate: z.iso.datetime(),
+  }).strict()).max(100).nullable(),
   usageMetricCount: z.number().int().nonnegative().nullable(),
+  usageMetrics: z.array(z.object({
+    metricCode: z.string(),
+    totalQuantity: z.number().int().nonnegative(),
+    eventCount: z.number().int().nonnegative(),
+    quotaLimit: z.number().int().nonnegative().nullable(),
+    remainingQuota: z.number().int().nonnegative().nullable(),
+    overQuota: z.boolean(),
+  }).strict()).max(100).nullable(),
   caseCount: z.number().int().nonnegative().nullable(),
   partialSections: z.array(z.enum(['entitlements', 'usage', 'cases'])).max(3),
   generatedAt: z.iso.datetime(),
@@ -154,6 +167,7 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
       data: z.array(z.object({
         id: z.string(),
         caseNumber: z.string(),
+        accountId: z.string(),
         status: z.enum(caseStatuses),
         severity: z.enum(caseSeverities),
         version: z.number().int().positive(),
@@ -166,9 +180,10 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
       }),
     }).passthrough().parse(await api.getJson(`/v1/cases?${params}`, correlationId));
     return {
-      cases: response.data.map(({ id, caseNumber, status, severity, version, createdAt, slaResponseDueAt }) => ({
+      cases: response.data.map(({ id, caseNumber, accountId, status, severity, version, createdAt, slaResponseDueAt }) => ({
         id,
         caseNumber,
+        accountId,
         status,
         severity,
         version,
@@ -182,7 +197,7 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
 
   server.registerTool('get_customer_summary', {
     title: 'Get customer summary',
-    description: 'Get customer status and section counts. ARR, email, names, entitlement details, and case text are never returned.',
+    description: 'Get customer status, renewal dates, and compact usage metrics. ARR, email, names, entitlement details beyond feature and renewal date, and case text are never returned.',
     inputSchema: customerInput,
     outputSchema: customerOutput,
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -191,10 +206,22 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
     const response = z.object({
       accountId: z.string(),
       status: z.enum(['ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CHURNED']),
-      tier: z.enum(['STARTER', 'BUSINESS', 'ENTERPRISE']),
+      tier: z.enum(['STARTER', 'BUSINESS', 'ENTERPRISE', 'Platinum']),
       version: z.number().int().positive(),
-      entitlements: z.array(z.unknown()).nullable(),
-      usage: z.object({ metrics: z.array(z.unknown()) }).passthrough().nullable(),
+      entitlements: z.array(z.object({
+        featureCode: z.string(),
+        effectiveTo: z.iso.datetime().nullable(),
+      }).passthrough()).max(100).nullable(),
+      usage: z.object({
+        metrics: z.array(z.object({
+          metricCode: z.string(),
+          totalQuantity: z.number().int().nonnegative(),
+          eventCount: z.number().int().nonnegative(),
+          quotaLimit: z.number().int().nonnegative().nullable(),
+          remainingQuota: z.number().int().nonnegative().nullable(),
+          overQuota: z.boolean(),
+        }).passthrough()).max(100),
+      }).passthrough().nullable(),
       cases: z.array(z.unknown()).nullable(),
       generatedAt: z.iso.datetime(),
       partialFailures: z.array(z.object({
@@ -208,7 +235,12 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
       tier: response.tier,
       version: response.version,
       entitlementCount: response.entitlements?.length ?? null,
+      entitlementRenewals: response.entitlements
+        ?.flatMap(({ featureCode, effectiveTo }) => effectiveTo
+          ? [{ featureCode, renewalDate: effectiveTo }]
+          : []) ?? null,
       usageMetricCount: response.usage?.metrics.length ?? null,
+      usageMetrics: response.usage?.metrics ?? null,
       caseCount: response.cases?.length ?? null,
       partialSections: response.partialFailures.map(({ section }) => section),
       generatedAt: response.generatedAt,
@@ -291,11 +323,12 @@ export function registerPlatformTools(server: McpServer, dependencies: ToolDepen
       status: z.literal('ESCALATED'),
       version: z.number().int().positive(),
       escalatedAt: z.iso.datetime(),
-    }).passthrough().parse(await api.patchJson(
-      `/v1/cases/${encodeURIComponent(input.caseId)}`,
-      { status: 'ESCALATED' },
-      `"v${input.expectedVersion}"`,
+    }).passthrough().parse(await api.postIdempotentJson(
+      `/v1/cases/${encodeURIComponent(input.caseId)}/escalate`,
+      undefined,
+      randomUUID(),
       correlationId,
+      `"v${input.expectedVersion}"`,
     ));
     return {
       decision: 'escalated',

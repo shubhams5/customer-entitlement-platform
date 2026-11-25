@@ -1,39 +1,43 @@
 # Security Notes
 
-This describes implemented controls and known boundaries, not a penetration-test certification.
+This records implemented controls and known boundaries; it is not a penetration-test certification.
 
-## Implemented controls
+## API and persistence
 
-- REST routes require bearer authentication and route scopes. Customer ARR has separate `customers:arr:read` and `customers:arr:write` authorization.
-- Conditional updates use version ETags and `If-Match`; stale writes fail rather than overwrite newer data.
-- Idempotency keys and request hashes are stored persistently and scoped by actor, method, and route. Case comments also have a database uniqueness constraint per case and idempotency key.
-- Webhook outbox events are written in the state-change transaction. Delivery records use leases, bounded retries, and HMAC-SHA256 signatures over the timestamp and exact JSON body.
-- An already-delivered webhook row is terminal for manual dispatch: it is returned without another network send. Dispatch claims exclude delivered rows, including in the concurrent path.
-- MCP forwards the delegated bearer token to NestJS and performs local scope checks before tool actions. NestJS remains the authorization authority.
-- MCP outputs are schema-validated and allowlisted. Case text, requester PII, customer names/emails, and ARR are omitted from tool responses. Comment bodies are not included in MCP audit events or returned outputs.
-- MCP API responses are capped at 1 MB and serialized tool outputs at 32 KiB. MCP API GETs and idempotent comment POSTs may retry once; optimistic PATCH requests do not retry.
-- MCP audit events are written to stderr by default. REST audit events are persisted in the database.
+- Protected REST routes require bearer authentication and route scopes. NestJS verifies credentials and authorizes requests; MCP only derives delegated context and forwards the bearer token.
+- ARR reads and writes require separate `customers:arr:read` and `customers:arr:write` scopes.
+- Optimistic updates require version ETags. Persistent idempotency records scope replay by actor, method, and route; case comments also have a per-case key uniqueness constraint.
+- Audit events, domain updates, and webhook outbox records are persisted transactionally where the domain operation requires it.
+- Upstream HTTP adapters use bounded timeouts, safe GET retries, and circuit breakers. Customer overview sections fail independently and report partial failures.
 
-## Escalation approval
+## Outbound webhook SSRF controls
 
-Escalation requires explicit MCP elicitation. Approval grants use 32 random bytes, are stored by token hash in process memory, expire after 60 seconds, and are bound to actor identity, token fingerprint, case ID, and expected version. Consumption is single-use. The resulting REST update still requires the delegated write scope and matching `If-Match`.
+- Destinations must be HTTP(S), without URL credentials or fragments.
+- Literal IPs and every DNS answer must be `unicast` according to `ipaddr.js`; loopback, private, link-local, IPv6 internal, mapped, and other non-unicast ranges are rejected.
+- DNS answers are validated together, then the selected address is pinned for the outbound request. Redirects are not followed.
+- `WEBHOOK_ALLOWED_PRIVATE_TARGETS` allows an exact canonical URL only, for local/testing receivers. Keep this setting narrow and operator-controlled; it is not a general private-network allowlist.
+- These application checks complement, rather than replace, network egress filtering. SSRF rejection and DNS-pinning behavior are covered by `src/modules/webhook/webhook-network.spec.ts`.
 
-Approval grants are intentionally not persistent: restarting the MCP process invalidates them. A multi-instance MCP deployment would need shared approval state or session affinity.
+Outbound deliveries are at-least-once. A subscriber must verify `HMAC_SHA256(secret, "<timestamp>.<raw JSON body>")`, enforce timestamp freshness, and durably deduplicate `X-Webhook-Id`. A sender cannot prevent duplicates if a subscriber processes an event but the sender fails to receive its acknowledgement.
 
-## Webhook boundaries
+## Local webhook receiver
 
-- This application sends outbound webhooks; it does not expose an inbound webhook receiver or maintain an inbound replay cache.
-- Outbound delivery is at-least-once. A subscriber must verify `HMAC_SHA256(secret, "<timestamp>.<raw JSON body>")`, enforce an acceptable timestamp window, and persistently deduplicate `X-Webhook-Id` before applying side effects.
-- Preventing a manual resend after a recorded successful delivery does not eliminate duplicates possible when a remote subscriber processes a request but the sender fails to receive its acknowledgement.
-- Webhook endpoint URLs are validated as HTTP(S), but this code does not block loopback, private, or link-local destinations. Restrict `webhooks:write` to trusted operators and apply network egress controls.
-- Signing secrets are persisted in the database and returned in the endpoint creation response. Protect database access and handle the creation response as secret material.
+`webhook-receiver/server.ts` is a local demonstration receiver bound to `127.0.0.1` by default. It caps request bodies at 1 MB, verifies the exact raw-body signature, rejects timestamps outside a default 300-second window, validates the event envelope, and inserts event IDs into a SQLite/libSQL table with a primary key. Repeated IDs are acknowledged as duplicates without reapplying effects. Tests cover tampering, stale timestamps, persistence across receiver restarts, and durable deduplication.
 
-## Identity and deployment boundaries
+The receiver is demonstration code, not a production ingress service. Its SQLite database contains received payloads and must be protected accordingly.
 
-- The MCP process decodes the delegated JWT claims for actor/scope context; it does not independently verify the JWT signature. It forwards the bearer token unchanged, and the NestJS API performs authoritative authentication and authorization.
-- Configure the MCP process with a least-privilege delegated token through `NEST_API_TOKEN`; do not place tokens or webhook secrets in source control or logs.
-- Use TLS between separately deployed MCP and API services. The client supports HTTP for local development.
+## MCP and LLM demo
 
-## Known dependency concern
+- MCP uses strict Zod tool schemas, delegated scopes, request correlation IDs, audit events, bounded API responses, and compact allowlisted outputs.
+- Case text, comments, names, email addresses, and ARR are omitted from MCP output. Customer summary can include renewal dates and compact usage metrics when the delegated scopes permit them.
+- MCP escalation requires user elicitation and a short-lived, single-use token bound to the user, case, and case version. The API still enforces the delegated write scope and ETag. Approval state is in-memory and does not survive process restart.
+- The optional assignment LLM demo only accepts a localhost API URL. It does not send ARR, PII, comments, case descriptions, or usage metrics to the LLM; use an isolated database containing the checked-in demo fixtures. The model endpoint receives allowlisted case metadata, tier, and renewal dates. Do not run this demonstration against real customer data.
+- MCP decodes delegated JWT claims for local scope context but does not independently verify the signature. The API verifies the bearer token authoritatively.
 
-`npm audit --omit=dev` reported 12 production advisories (1 critical, 7 high, 4 moderate), including a critical transitive `@fastify/middie` advisory. `npm ci` reported 26 advisories across the full dependency tree. Broad fixes involve major NestJS/Fastify upgrades and were not applied here. Re-run the audit before release and evaluate compatible upgrades.
+## Dependency audit and remaining risks
+
+The latest `npm.cmd audit --omit=dev` reported no critical or high production advisories and one moderate advisory: `csv-parse` versions below 7.0.2. The audit suggests `csv-parse@7.0.3`, a breaking major upgrade; it was not applied because the requested fix scope was critical/high issues and the current adapter depends on the existing major version. Re-run the audit before release.
+
+Demo OAuth credentials and the Compose fallback signing secret are for local evaluation only. Replace them, use TLS for separately deployed services, protect database files and webhook secrets, and configure network egress controls before deployment.
+
+Docker Compose and the live LLM demo were not executed in this environment; see `TESTEVALS.md`.

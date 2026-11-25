@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "2026-01",
+  "sourceSystem": "assignment-demo",
+  "exportedAt": "2026-11-25T00:00:00.000Z",
+  "customers": [
+    {
+      "accountId": "ACC-007",
+      "externalCrmId": null,
+      "name": "Assignment Demo Account",
+      "primaryEmail": "assignment-demo@example.invalid",
+      "tier": "Platinum",
+      "status": "ACTIVE",
+      "region": "assignment-demo",
+      "annualRecurringRevenue": null
+    }
+  ]
+}

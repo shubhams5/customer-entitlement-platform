@@ -45,10 +45,14 @@ import {
 } from '../../common/pagination/cursor-pagination';
 import { PrismaService } from '../../common/prisma/prisma.module';
 import { CircuitBreaker, CircuitBreakerRegistry } from '../../common/resilience/circuit-breaker';
-import { httpRequestOnce } from '../../common/resilience/http-client';
 import { parseRetryAfterMs } from '../../common/resilience/upstream-error';
 import { AuditService } from '../audit/audit.module';
 import { Idempotent } from '../idempotency/idempotency.module';
+import {
+  parseWebhookTarget,
+  UnsafeWebhookTargetError,
+  webhookHttpRequestOnce,
+} from './webhook-network';
 import {
   AttemptOutcome,
   classifyHttpOutcome,
@@ -203,11 +207,9 @@ export class WebhookDeliveryExecutor {
     let outcome: AttemptOutcome;
     const started = Date.now();
     try {
-      const result = await httpRequestOnce(
-        `webhook:${delivery.endpointId}`,
+      const result = await webhookHttpRequestOnce(
         delivery.endpoint.url,
         {
-          method: 'POST',
           headers: {
             'content-type': 'application/json',
             'x-webhook-id': delivery.id,
@@ -218,10 +220,14 @@ export class WebhookDeliveryExecutor {
           body: delivery.payloadJson,
         },
         this.config.webhooks.timeoutMs,
+        this.config.webhooks.allowedPrivateTargets,
       );
       outcome = classifyHttpOutcome(result.status, parseRetryAfterMs(result.headers.get('retry-after')));
     } catch (err) {
-      outcome = classifyTransportError(err);
+      outcome =
+        err instanceof UnsafeWebhookTargetError
+          ? { kind: 'FAILED', responseStatus: null, error: err.message, retryable: false }
+          : classifyTransportError(err);
     }
 
     if (outcome.kind === 'DELIVERED') {
@@ -280,9 +286,19 @@ export class WebhookService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly executor: WebhookDeliveryExecutor,
+    private readonly config: AppConfig,
   ) {}
 
   async createEndpoint(dto: CreateWebhookEndpointDto, actor: ActorContext) {
+    let target: URL;
+    try {
+      target = parseWebhookTarget(dto.url, this.config.webhooks.allowedPrivateTargets);
+    } catch (err) {
+      if (err instanceof UnsafeWebhookTargetError) {
+        throw Problems.badRequest(err.message, 'UNSAFE_WEBHOOK_TARGET');
+      }
+      throw err;
+    }
     const signingSecret =
       dto.signingSecret ?? `whsec_${randomBytes(24).toString('hex')}`;
     const uniqueEvents = Array.from(new Set(dto.subscribedEvents));
@@ -290,7 +306,7 @@ export class WebhookService {
     const created = await this.prisma.$transaction(async (tx) => {
       const endpoint = await tx.webhookEndpoint.create({
         data: {
-          url: dto.url,
+          url: target.href,
           description: dto.description ?? null,
           signingSecret,
           subscribedEventsJson: JSON.stringify(uniqueEvents),

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "bd0eb10c-10ad-4bdb-b2de-cc79e5bc7b69",
     "name": "Customer Entitlement Platform - Functional and Regression",
-    "description": "Sequential smoke and regression checks for public health, OAuth scopes, fixture seeding, customer ARR authorization, case search, idempotent comments, and ETag concurrency. Run against a disposable local/demo database.",
+    "description": "Sequential smoke and regression checks for public health, OAuth scopes, fixture seeding, customer ARR authorization, assignment fixtures, case search, idempotent comments, ETag concurrency, and explicit escalation. Run against a disposable local/demo database.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -524,6 +524,142 @@
           "raw": "{{baseUrl}}/v1/cases/{{caseId}}",
           "host": ["{{baseUrl}}"],
           "path": ["v1", "cases", "{{caseId}}"]
+        }
+      }
+    },
+    {
+      "name": "16 - Sync assignment demo fixture",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Assignment fixture syncs ACC-007', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.status).to.eql('COMPLETED');",
+              "  pm.expect(body.consistentAccountIds).to.include('ACC-007');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "postman-assignment-sync-{{runId}}"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fixturesDir\": \"fixtures/assignment-demo\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/integrations/fixtures/sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "integrations", "fixtures", "sync"]
+        }
+      }
+    },
+    {
+      "name": "17 - Verify assignment customer renewal",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ACC-007 is Platinum with the assignment renewal date', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.accountId).to.eql('ACC-007');",
+              "  pm.expect(body.tier).to.eql('Platinum');",
+              "  pm.expect(body.entitlements.some((item) => item.effectiveTo.startsWith('2027-01-15'))).to.eql(true);",
+              "  pm.expect(body.usage.metrics).to.be.an('array');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/customers/ACC-007",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "customers", "ACC-007"]
+        }
+      }
+    },
+    {
+      "name": "18 - Search assignment P1 case",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Assignment P1 case is older than 48 hours at the fixed as-of date', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.data.some((item) => item.id === 'case_assignment_acc007_p1')).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases?accountId=ACC-007&status=OPEN&severity=P1&createdBefore=2026-11-23T00:00:00.000Z&sort=-createdAt&limit=5",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases"],
+          "query": [
+            {"key": "accountId", "value": "ACC-007"},
+            {"key": "status", "value": "OPEN"},
+            {"key": "severity", "value": "P1"},
+            {"key": "createdBefore", "value": "2026-11-23T00:00:00.000Z"},
+            {"key": "sort", "value": "-createdAt"},
+            {"key": "limit", "value": "5"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "19 - Escalate case explicitly",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Explicit escalation succeeds with the current ETag', function () {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(pm.response.json().status).to.eql('ESCALATED');",
+              "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"v3\"');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{adminToken}}"},
+          {"key": "If-Match", "value": "{{caseEtagV2}}"},
+          {"key": "Idempotency-Key", "value": "postman-escalate-{{runId}}"}
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/cases/{{caseId}}/escalate",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "cases", "{{caseId}}", "escalate"]
         }
       }
     }

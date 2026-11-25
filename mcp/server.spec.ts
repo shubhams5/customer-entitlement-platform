@@ -10,7 +10,7 @@ import type { McpAuditEvent } from './tools';
 const CASE_ID = 'case-001';
 const NOW = '2025-01-02T03:04:05.000Z';
 
-function token(subject = 'agent-123', scope = 'cases:read cases:write customers:read'): string {
+function token(subject = 'agent-123', scope = 'cases:read cases:write customers:read entitlements:read usage:read'): string {
   const claims = Buffer.from(JSON.stringify({ sub: subject, scope })).toString('base64url');
   return `header.${claims}.signature`;
 }
@@ -62,6 +62,7 @@ describe('MCP server', () => {
           data: [{
             id: CASE_ID,
             caseNumber: 'CASE-0001',
+            accountId: 'acct_01J9X8K2M4N6P8Q0R2S4',
             status: 'OPEN',
             severity: 'HIGH',
             version: 3,
@@ -82,9 +83,29 @@ describe('MCP server', () => {
           status: 'ACTIVE',
           tier: 'ENTERPRISE',
           version: 4,
-          entitlements: [{ id: 'ent-1', contractRef: 'secret' }],
-          usage: { metrics: [{ metricCode: 'requests', totalQuantity: 100 }] },
+          entitlements: [{ id: 'ent-1', featureCode: 'SUPPORT_PORTAL', effectiveTo: '2027-01-15T00:00:00.000Z', contractRef: 'secret' }],
+          usage: { metrics: [{
+            metricCode: 'requests',
+            totalQuantity: 100,
+            eventCount: 2,
+            quotaLimit: 1000,
+            remainingQuota: 900,
+            overQuota: false,
+          }] },
           cases: [{ id: CASE_ID, description: 'private comment-like content' }],
+          generatedAt: NOW,
+          partialFailures: [],
+        });
+      }
+      if (url.pathname === '/v1/customers/ACC-007') {
+        return jsonResponse({
+          accountId: 'ACC-007',
+          status: 'ACTIVE',
+          tier: 'Platinum',
+          version: 1,
+          entitlements: [{ featureCode: 'SUPPORT_PORTAL', effectiveTo: '2027-01-15T00:00:00.000Z' }],
+          usage: { metrics: [] },
+          cases: [],
           generatedAt: NOW,
           partialFailures: [],
         });
@@ -125,6 +146,7 @@ describe('MCP server', () => {
       cases: [{
         id: CASE_ID,
         caseNumber: 'CASE-0001',
+        accountId: 'acct_01J9X8K2M4N6P8Q0R2S4',
         status: 'OPEN',
         severity: 'HIGH',
         version: 3,
@@ -151,7 +173,19 @@ describe('MCP server', () => {
       tier: 'ENTERPRISE',
       version: 4,
       entitlementCount: 1,
+      entitlementRenewals: [{
+        featureCode: 'SUPPORT_PORTAL',
+        renewalDate: '2027-01-15T00:00:00.000Z',
+      }],
       usageMetricCount: 1,
+      usageMetrics: [{
+        metricCode: 'requests',
+        totalQuantity: 100,
+        eventCount: 2,
+        quotaLimit: 1000,
+        remainingQuota: 900,
+        overQuota: false,
+      }],
       caseCount: 1,
       partialSections: [],
       generatedAt: NOW,
@@ -160,6 +194,21 @@ describe('MCP server', () => {
     expect(summaryText).not.toContain('annualRecurringRevenue');
     expect(summaryText).not.toContain('Private Customer');
     expect(summaryText).not.toContain('private@example.test');
+
+    const assignmentSummary = await client.callTool({
+      name: 'get_customer_summary',
+      arguments: { accountId: 'ACC-007' },
+    });
+    expect(assignmentSummary.structuredContent).toMatchObject({
+      accountId: 'ACC-007',
+      tier: 'Platinum',
+      entitlementRenewals: [{
+        featureCode: 'SUPPORT_PORTAL',
+        renewalDate: '2027-01-15T00:00:00.000Z',
+      }],
+      usageMetrics: [],
+      partialSections: [],
+    });
 
     const secretComment = 'untrusted comment text not for logs';
     const comment = await client.callTool({
@@ -172,7 +221,7 @@ describe('MCP server', () => {
       createdAt: NOW,
     });
     expect(JSON.stringify(comment.structuredContent)).not.toContain(secretComment);
-    const commentRequest = calls[2];
+    const commentRequest = calls[3];
     expect(new Headers(commentRequest.init.headers).get('authorization')).toBe(`Bearer ${token()}`);
     expect(new Headers(commentRequest.init.headers).get('idempotency-key')).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
@@ -193,7 +242,7 @@ describe('MCP server', () => {
   it('requires explicit elicitation and a single-use version-bound approval before escalation', async () => {
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
-      if (url.pathname === `/v1/cases/${CASE_ID}` && init?.method === 'PATCH') {
+      if (url.pathname === `/v1/cases/${CASE_ID}/escalate` && init?.method === 'POST') {
         return jsonResponse({
           id: CASE_ID,
           status: 'ESCALATED',
@@ -232,7 +281,8 @@ describe('MCP server', () => {
       escalatedAt: NOW,
     });
     expect(new Headers(calls[0].init.headers).get('if-match')).toBe('"v3"');
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ status: 'ESCALATED' });
+    expect(new Headers(calls[0].init.headers).get('idempotency-key')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(calls[0].init.body).toBeUndefined();
 
     const replay = await client.callTool({
       name: 'escalate_case',
@@ -316,6 +366,49 @@ describe('MCP server', () => {
     await readOnlyServer.close();
   });
 
+  it('propagates restricted customer sections as partial output without inventing renewal or usage data', async () => {
+    const identity = delegatedIdentityFromToken(token('read-agent', 'customers:read'));
+    let forwardedAuthorization = '';
+    const api = new NestApiClient('http://api.test', identity.accessToken, async (_input, init) => {
+      forwardedAuthorization = new Headers(init?.headers).get('authorization') ?? '';
+      return jsonResponse({
+        accountId: 'ACC-007',
+        status: 'ACTIVE',
+        tier: 'Platinum',
+        version: 1,
+        entitlements: null,
+        usage: null,
+        cases: null,
+        generatedAt: NOW,
+        partialFailures: [
+          { section: 'entitlements', code: 'SECTION_FORBIDDEN' },
+          { section: 'usage', code: 'SECTION_FORBIDDEN' },
+          { section: 'cases', code: 'SECTION_FORBIDDEN' },
+        ],
+        annualRecurringRevenue: 9_999_999,
+      });
+    });
+    const server = createPlatformMcpServer({ api, identity, audit: () => undefined });
+    const client = new Client({ name: 'restricted-reader', version: '1.0.0' }, { capabilities: {} });
+    await connect(server, client);
+
+    const result = await client.callTool({
+      name: 'get_customer_summary',
+      arguments: { accountId: 'ACC-007' },
+    });
+    expect(forwardedAuthorization).toBe(`Bearer ${token('read-agent', 'customers:read')}`);
+    expect(result.structuredContent).toMatchObject({
+      accountId: 'ACC-007',
+      entitlementRenewals: null,
+      usageMetrics: null,
+      partialSections: ['entitlements', 'usage', 'cases'],
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain('annualRecurringRevenue');
+
+    await client.close();
+    await server.close();
+  });
+
   it('binds approvals to user, case, and version; expires and consumes them once', () => {
     const store = new ApprovalStore();
     const identity = delegatedIdentityFromToken(token());
@@ -379,6 +472,7 @@ describe('MCP server', () => {
       data: [{
         id: CASE_ID,
         caseNumber: 'C'.repeat(40_000),
+        accountId: 'acct_01J9X8K2M4N6P8Q0R2S4',
         status: 'OPEN',
         severity: 'HIGH',
         version: 1,

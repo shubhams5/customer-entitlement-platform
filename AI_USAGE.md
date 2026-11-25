@@ -1,26 +1,22 @@
 # AI Usage Disclosure
 
-AI assistance was used throughout implementation and submission preparation.
-
-## Assistance provided
-
-- Implemented and modified REST API, upstream resilience, persistence, webhook delivery, and MCP server code in response to the user-provided requirements.
-- Added and adjusted unit, contract, MCP, and end-to-end tests, including concurrency, authorization, timeout, circuit-breaker, and webhook replay cases.
-- Prepared Docker/Compose configuration, Postman collection/environment, and project documentation in this session.
-- Reviewed existing repository code and test output to document current behavior and limitations.
+AI assistance was used to inspect and modify the existing API, MCP server, webhook delivery, fixtures, tests, and submission documentation. Changes were kept within the requested assignment work; no independent human review is claimed.
 
 ## Verification actually performed
 
-After a clean `npm ci`, `npm run test:all` passed type-checking, 8 Jest suites / 22 tests, and 8 E2E tests. `npm run build`, Prisma client generation, migrations, fixture seeding, and local API health checks passed. Newman ran all 15 Postman requests with 15 assertions and no failures. The MCP OAuth bootstrap was smoke-tested against the local API. The final command results and limitations are recorded in `REQUIREMENT_TRACEABILITY.md` and `TESTEVALS.md`.
+- `npm.cmd run test:all` passed after the latest code changes: type-check, 11 unit suites / 37 tests, and 8 E2E tests.
+- `npm.cmd run build` passed.
+- Prisma migrations and seed ran against a disposable SQLite database. Standard fixture counts and the assignment fixture/case ID are recorded in `TESTEVALS.md`.
+- The current production dependency audit found one moderate `csv-parse` advisory and no critical/high findings.
+- The updated Postman collection/environment parse as JSON; the current collection was not run because Newman is unavailable.
 
-No human independent code review, external security assessment, or production deployment is claimed. No live external upstream systems were exercised.
+The test outputs, exact limits, and blocked validation are recorded in `TESTEVALS.md` and `REQUIREMENT_TRACEABILITY.md`. No results were inferred from static inspection.
 
-## Validation limitations
+## Not executed
 
-The preparation environment did not have Docker, Docker Compose, Podman, or the Postman desktop app. Newman was run through `npx`. Therefore:
+- Docker/Compose build, startup, migration/seed orchestration, and test profile; Docker is unavailable.
+- Live MCP + LLM assignment demo; no `OPENAI_API_KEY` is present. The runnable script is implemented but has no live tool-call transcript or model result to report.
+- Newman execution of the current 19-request collection or Postman desktop import.
+- Live CRM, ERP, usage, or external webhook subscriber integration.
 
-- `docker compose up --build` and the Compose migration/seed/test services could not be executed here.
-- The Postman collection was executed with Newman, but not imported into the Postman desktop app.
-- Any result for those items is marked unverified, not successful.
-
-The Compose setup uses the repository's local demo OAuth clients. These are evaluation credentials only and must be replaced for deployment.
+The local demo OAuth credentials and signing secrets are evaluation-only. Do not use them in a deployed environment.

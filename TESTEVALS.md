@@ -1,44 +1,45 @@
 # Test Evaluation
 
-## Scope
+Results below were produced in this workspace; they are not production certification.
 
-No separate Applied AI Engineer rubric was present in the workspace. This evaluation maps the requirements in the conversation and `openapi.yaml`; it does not claim coverage beyond them.
+## Verified
 
-## Requirement evidence
+| Command/check | Result |
+|---|---|
+| `npm.cmd run test:all` | Passed type-check, 11 unit suites / 37 tests, and 1 E2E suite / 8 tests. |
+| `npm.cmd run build` | Passed. |
+| `npm.cmd run prisma:generate` | Passed with Prisma Client 6.19.3. |
+| `npm.cmd run prisma:deploy` with `DATABASE_URL=file:./assignment-smoke.db` | Both migrations applied to a disposable database. Prisma emitted its existing Driver Adapter datasource-URL warning. |
+| `npm.cmd run db:seed` with a disposable database | Passed twice against the same migrated database: standard fixtures processed 4 customers, 11 entitlements, 8 usage events; assignment fixture processed 1 customer, 1 entitlement, 0 usage events, and seeded `case_assignment_acc007_p1`. The disposable database and SQLite sidecars were removed. |
+| `npm.cmd audit --omit=dev` | No critical/high production findings. One moderate `csv-parse` advisory remains (`<7.0.2`); the suggested fixed version is a breaking major upgrade. Command exits 1 because of that advisory. |
+| Postman JSON parse | Collection and environment parsed; collection contains 19 sequential requests. |
 
-| Requirement | Evidence | Result |
-|---|---|---|
-| Customer aggregation and partial section failures | `src/modules/customer/customer-aggregation.spec.ts` covers a timed-out section, available sections, and ARR redaction. | Passed |
-| Case filtering, sorting, and cursor pagination | `src/modules/cases/case-search.spec.ts` and E2E cursor tests. | Passed |
-| Persistent idempotency and concurrent comment creation | E2E tests cover exact replay, payload mismatch, concurrent same-key comment creation, and one persisted comment. | Passed |
-| Authentication, scopes, and ARR authorization | E2E tests cover unauthenticated and insufficient-scope denials, ARR field permissions, and restricted writes. | Passed |
-| Optimistic concurrency | E2E tests cover missing and stale `If-Match`, plus concurrent updates using one version; only one update succeeds. | Passed |
-| Upstream adapters and resilience | Fixture sync is exercised against the test database. Resilience unit tests cover HTTP 503 retry, circuit open/half-open behavior, and timeout classification. An integration-service test verifies timeout-to-503 mapping and failed-run persistence. | Passed with mocked HTTP and adapters; no live upstream was contacted |
-| Webhook signing and delivery | E2E sends to a local HTTP receiver and verifies the exact-body signature; signature tests reject changed bodies, wrong secrets, and malformed headers. | Passed |
-| Webhook replay/duplicate dispatch | E2E issues two concurrent dispatch requests and then repeats dispatch after delivery; only one callback is received and `attemptCount` remains 1. | Passed for this API dispatch path |
-| MCP schemas, delegation, redaction, and output bounds | `mcp/server.spec.ts` verifies strict inputs, forwarded bearer/request ID, compact outputs, PII/ARR and untrusted-text omission, response/output limits, and safe retry behavior. | Passed using the MCP SDK in-memory transport |
-| MCP write authorization and human escalation approval | MCP tests cover missing scopes, no elicitation support, refusal, user/case/version binding, expiry, one-time consumption, and no API write before approval. | Passed |
-| OpenAPI contract and fixture validation | `src/contract-and-fixtures.spec.ts`. | Passed |
+The suite covers authorization and ARR policies, case filtering and cursor paging, ETags, idempotency including concurrent comments, upstream retry/circuit-breaker/partial-failure behavior, webhook signatures and delivery replay, SSRF destination checks, local receiver signature/timestamp/deduplication, MCP delegation/redaction/output bounds, escalation approval, assignment fixture consistency, and the deterministic 48-hour/90-day boundaries.
 
-## Commands and results
+## Not verified here
 
-Verified in this workspace after `npm.cmd ci`:
+- `newman` is not installed, so the modified 19-request Postman collection was not run. An earlier 15-request collection result does not verify this updated export.
+- `docker` is unavailable. `docker compose up --build`, Compose migration/seed ordering, and the Compose test profile remain unverified. YAML or JSON parsing is not equivalent to running Compose.
+- `OPENAI_API_KEY` is absent, so the real-LLM MCP assignment demo was not run. Its script and deterministic evaluation tests are present.
+- No external CRM, ERP, usage provider, or production webhook subscriber was contacted.
+- The Postman desktop app was not used.
 
-- `npm.cmd run test:all` — type-check passed; 8 Jest suites / 22 tests passed; E2E 1 suite / 8 tests passed.
-- `npm.cmd run build` — passed.
-- `npm.cmd run prisma:generate` — passed.
-- `npm.cmd run prisma:deploy` with `DATABASE_URL=file:./submission-check.db` — both migrations applied to a disposable SQLite database.
-- `npm.cmd run db:seed` with that database — completed; 4 customers, 11 entitlements, and 8 usage events processed.
-- `npm.cmd run start:prod` and `npm.cmd run start:dev` — both returned healthy `/health` responses against the disposable database.
-- Newman ran the exported Postman collection against the local API — 15 requests, 15 assertions, 0 failures.
-- A YAML/JSON syntax check parsed `docker-compose.yml`, the Postman collection, environment, and all Postman scripts.
-- `npm.cmd audit --omit=dev` — 12 production advisories: 1 critical, 7 high, 4 moderate. `npm ci` reported 26 advisories across the full dependency tree.
+## Manual commands for blocked checks
 
-## Limits
+With Docker Engine and Compose v2:
 
-- Upstream HTTP behavior was tested with mocks; no external CRM, ERP, or usage service was contacted.
-- The MCP suite uses in-memory MCP transports. The Compose OAuth bootstrap was smoke-tested against the local API; a Docker-attached stdio client session was not exercised.
-- Docker and Docker Compose were unavailable, so no image build, `docker compose up --build`, or Compose test-profile run was performed. YAML parsing is not equivalent to Compose validation.
-- Newman exercised the collection; the Postman desktop app itself was not used.
-- No inbound webhook receiver exists in this API. Signature verification is a helper/tested contract, not an inbound request flow; timestamp freshness and durable event deduplication are subscriber responsibilities.
-- Tests do not establish production load capacity, multi-instance behavior, database recovery across process restarts, or centralized log delivery.
+```powershell
+docker compose up --build
+docker compose --profile test run --rm test
+```
+
+With the API and local assignment fixture running, a delegated read token, and an explicit provider key:
+
+```powershell
+$env:NEST_API_BASE_URL = 'http://localhost:3000'
+$env:NEST_API_TOKEN = '<delegated bearer token with cases:read customers:read entitlements:read usage:read>'
+$env:OPENAI_API_KEY = '<provider key>'
+npm run mcp:assignment-demo
+```
+
+To run the current collection, install/use Newman separately and point it at `postman/local.postman_environment.json` against a disposable API database.

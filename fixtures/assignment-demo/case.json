@@ -1,0 +1,16 @@
+{
+  "id": "case_assignment_acc007_p1",
+  "caseNumber": "CASE-ASSIGN-007",
+  "accountId": "ACC-007",
+  "severity": "P1",
+  "status": "OPEN",
+  "openedAt": "2026-10-24T08:12:00.000Z",
+  "fixtureOnlyFields": {
+    "entitledSupportLevel": "STANDARD",
+    "slaResponseDueAt": "2026-10-24T08:27:00.000Z",
+    "requesterEmail": "assignment-demo@example.invalid",
+    "subject": "Assignment sample P1 support case",
+    "description": "Fixture-only case text; not used by the assignment answer."
+  },
+  "notes": "Only accountId, severity, status, openedAt, and the linked entitlement renewal date are assignment-provided inputs."
+}

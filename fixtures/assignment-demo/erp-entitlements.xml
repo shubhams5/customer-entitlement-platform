@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EntitlementCatalog sourceSystem="assignment-demo" exportedAt="2026-11-25T00:00:00Z">
+  <AccountContract accountId="ACC-007" contractRef="ASSIGNMENT-DEMO-ACC-007">
+    <Entitlement id="ent_assignment_demo_acc007" kind="SUPPORT_PLAN" status="ACTIVE">
+      <FeatureCode>SUPPORT_PORTAL</FeatureCode>
+      <SupportLevel>STANDARD</SupportLevel>
+      <EffectiveFrom>2026-01-01T00:00:00.000Z</EffectiveFrom>
+      <EffectiveTo>2027-01-15T00:00:00.000Z</EffectiveTo>
+    </Entitlement>
+  </AccountContract>
+</EntitlementCatalog>

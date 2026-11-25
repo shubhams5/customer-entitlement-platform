@@ -1,50 +1,48 @@
 # Requirement Traceability
 
-Statuses are based on repository evidence and commands actually run. “Implemented” does not imply production certification.
+Statuses reflect repository code and checks actually run in this workspace. They do not imply production certification.
 
-## Earlier REST and MCP requirements
-
-| Requirement | Status | Evidence / limit |
-|---|---|---|
-| Customer create/list/detail/update and aggregation | Implemented | Customer E2E, aggregation unit, and Postman regression checks. Aggregation reports failed sections independently. |
-| ARR field-level read/write authorization | Implemented | E2E and Postman verify permitted read, redacted read, and denied write without ARR scopes. |
-| Entitlement CRUD, evaluation, and support policy use | Implemented | E2E verifies entitlement evaluation and case severity/SLA rules. |
-| Usage event ingestion, listing, and summary | Implemented | E2E verifies recording and quota summary. |
-| Case create/read/update/comment and business rules | Implemented | E2E exercises create, comments, escalation, SLA rules, and authorization. |
-| Case filters, sort validation, and cursor pagination | Implemented | Unit tests cover query construction/invalid sorts/date ranges; E2E and Postman exercise search and cursors. |
-| Persistent idempotency, payload mismatch, concurrent comment replay | Implemented | Prisma uniqueness and idempotency records; E2E tests exact replay, mismatch, and same-key concurrency. |
-| Optimistic concurrency for updates | Implemented | E2E and Postman verify ETags, concurrent writes, 412 stale, and 428 missing precondition. |
-| Fixture sync, source reconciliation, and sync-run history | Implemented | E2E fixture sync plus local migration/seed validation. |
-| Upstream adapters, timeout, safe retry, circuit breaker, and partial failure handling | Implemented | Mocked resilience tests, customer aggregation timeout test, failed-sync persistence test, and fixture E2E. No live upstream was contacted. |
-| Audit listing and structured logs/correlation IDs | Implemented | E2E reads persisted audit events; API logs observed correlation IDs. No centralized log backend was tested. |
-| Transactional webhook outbox, endpoint management, signed delivery | Implemented | Schema/service flow and local callback E2E; exact-body signature and tampering tested. |
-| Webhook delivery retry/replay protection | Partially implemented | Sender prevents dispatch after `DELIVERED`; concurrent dispatch is lease-protected. Outbound is at-least-once, and no inbound receiver or subscriber replay cache exists. Subscribers must enforce timestamp freshness and durable event-ID deduplication. |
-| OpenAPI contract | Implemented | OpenAPI/fixture contract test passes. |
-| MCP tools use official SDK and existing REST API only | Implemented | Tool implementation calls `NestApiClient`; MCP tests use in-memory SDK transport. |
-| MCP strict schemas, delegated identity/scopes, compact outputs, limits, redaction, and audit | Implemented | Tests cover strict inputs, forwarded bearer/request ID, omitted PII/ARR/untrusted text, output bounds, and audit events. No live model/client prompt-injection experiment was run. |
-| MCP comment idempotency and unauthorized write denial | Implemented | MCP tests verify same-key safe retry and scope denial before API access. |
-| Explicit human approval for MCP escalation | Implemented | Tests cover decline, missing elicitation, user/case/version binding, expiry, and one-time use. Approval state is in-memory and lost on restart. |
-| Requirement-by-requirement audit records | Implemented | `TESTEVALS.md`, `SECURITY.md`, `DECISIONS.md`, and this report map evidence and limitations. No separate assignment rubric was found; scope is the conversation requirements and `openapi.yaml`. |
-
-## Submission-preparation requirements
+## REST platform and security
 
 | Requirement | Status | Evidence / limit |
 |---|---|---|
-| One-command Compose startup of API, migration/seed bootstrap, and MCP | Partially implemented | `Dockerfile` and `docker-compose.yml` define dependencies/health checks and initialization. Docker/Compose were unavailable, so the stack was not built or started. |
-| Automatic migrations and seed data | Partially implemented | `db-init` is configured to run migrations then fixture seeding before API startup. Both commands passed separately against a disposable SQLite database; Compose ordering was not runtime-tested. |
-| Tests independent of normal service startup | Implemented locally; Compose profile unverified | `npm run test:all` passed; Compose has an opt-in `test` profile. The profile container was not run. |
-| Postman functional/regression collection and environment | Implemented and Newman-verified | 15 requests / 15 assertions passed against the local API. The Postman desktop app was not used; webhook dispatch is omitted because the collection provisions no callback receiver. |
-| README setup, architecture, examples, <5-minute demo | Implemented; demo timing unverified | Local dev and production server health checks passed. Docker first-build time and full Compose walkthrough were not measured. |
-| AI assistance disclosure | Implemented | `AI_USAGE.md` describes assistance and explicitly identifies unverified checks. |
-| Validate every command from a clean environment | Partially implemented / blocked | `npm ci`, generation, migration, seed, build, type-check, unit/E2E, local dev/prod startup, and Newman collection passed. Docker commands remain unverified because Docker is absent; YAML parsing is not equivalent to Compose validation. |
+| Customer aggregation, independent partial failures, and ARR field authorization | Implemented | API E2E and customer aggregation unit tests cover section availability and ARR scopes. |
+| Case search filtering, sorting, and cursor pagination | Implemented | Case search tests and API E2E cover filters, invalid input, and cursor traversal. |
+| Idempotent comments and concurrent replay handling | Implemented | Persistent idempotency and comment uniqueness; E2E covers replay, mismatch, and concurrent same-key requests. |
+| Optimistic concurrency | Implemented | E2E covers missing/stale ETags and concurrent updates; only one write with the same version succeeds. |
+| Authentication, scopes, upstream resilience, structured audit, correlation IDs | Implemented | API E2E and unit suites cover authorization, retries, circuit breaker, partial failures, and audit behavior; external providers were not contacted. |
+| Dedicated `POST /v1/cases/{caseId}/escalate` | Implemented | OpenAPI contract and E2E cover scope, idempotency, stale/missing ETag, repeat escalation, and business transition. |
+| `case.escalated` webhook event and transactional outbox | Implemented | OpenAPI event enum and E2E delivery checks include the event; event/outbox persistence shares the transition transaction. |
+| High/critical production dependency findings | Implemented | Compatible NestJS/Fastify and Prisma upgrades applied; current production audit has no critical/high findings. |
+| Remaining dependency findings | Partially implemented | One moderate `csv-parse` advisory remains because the suggested fix requires a major version upgrade. |
+| Webhook SSRF protection, including IPv4/IPv6 internal destinations and DNS rebinding | Implemented | Unit tests cover blocked address classes, mixed DNS answers, exact local allowlisting, and validated-address pinning. Network egress controls remain operationally required. |
+| Local signed webhook receiver with freshness and durable deduplication | Implemented | Receiver unit test verifies exact body, rejects tampering/stale timestamps, and confirms event-ID dedup persists across receiver restart. |
 
-## Explicitly skipped / unresolved
+## MCP and assignment demonstration
 
-- Docker image/Compose execution and Compose-profile test validation.
-- Postman desktop import/UI validation; Newman is the executed equivalent.
-- Postman webhook callback/replay flow, because no callback receiver is provisioned in this local collection.
-- Live external upstreams, subscriber systems, production load, and multi-instance deployment.
+| Requirement | Status | Evidence / limit |
+|---|---|---|
+| Official TypeScript MCP SDK, API-only access, delegated identity/scopes | Implemented | MCP tools use `NestApiClient`; tests assert bearer and correlation propagation and denial before API access when scope is missing. |
+| Strict schemas, compact output, ARR/PII redaction, audit, untrusted text handling | Implemented | MCP tests cover strict inputs/outputs, sensitive field omission, bounded responses, audit redaction, and prompt-injection-like text omitted from tool responses. |
+| Human approval for MCP escalation | Implemented | Tests cover no elicitation, refusal, user/case/version binding, expiry, and one-time use. |
+| Dedicated assignment sample (`ACC-007`, Platinum, P1/open, case timestamp, renewal date) | Implemented | Dedicated CRM/ERP/case fixtures, idempotent seed, API E2E, and contract tests. Assignment usage CSV intentionally has no rows because no usage values were supplied. |
+| Deterministic 48-hour/90-day assignment evaluation | Implemented | Unit tests verify strict “older than 48 hours”, inclusive 90-day boundary, case age, and renewal date. |
+| Reproducible MCP + real-LLM demo with tool calls and failure case | Partially implemented / live run unverified | Script uses MCP stdio tools, an OpenAI-compatible chat-completions endpoint, and an `ACC-999` not-found case. No provider key was available, so no live LLM output/tool-call transcript is claimed. |
 
-## Submission validation record
+## Submission and operations
 
-Update this section after running the checks from a machine with Docker Compose and Postman/Newman. Do not mark the blocked checks as passed based on static inspection alone.
+| Requirement | Status | Evidence / limit |
+|---|---|---|
+| Compose starts API, migrations, seed, and MCP | Partially implemented / runtime unverified | Compose wiring exists. Docker is unavailable, so no image build or startup was run. |
+| Compose test profile | Partially implemented / runtime unverified | Profile command is documented but Docker is unavailable. Local `npm run test:all` passed independently. |
+| Postman functional/regression collection and environment | Implemented / current collection execution unverified | Updated 19-request JSON parsed. Newman is not installed, so the updated export was not run; an earlier 15-request result does not apply. |
+| README, SECURITY, DECISIONS, TESTEVALS, AI_USAGE, and this traceability report | Implemented | Docs state current behavior, verified results, and blocked checks. |
+
+## Explicitly not verified or not supplied
+
+- Docker Compose image build/start, initialization ordering, and profile test run.
+- Live OpenAI-compatible LLM run and actual model-generated transcript.
+- Newman execution of the current collection and Postman desktop import.
+- Live upstream providers or production webhook subscribers.
+- Assignment usage quantities: none were supplied, so none were fabricated.
+- No separate assignment rubric file was present in the workspace; this report maps the requirements supplied in the conversation.

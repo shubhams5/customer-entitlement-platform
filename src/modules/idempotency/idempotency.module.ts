@@ -59,8 +59,16 @@ export function hashRequestBody(body: unknown): string {
  * Fingerprint of everything that can change the response: the payload and
  * the caller's granted scopes (field-level authorization depends on them).
  */
-export function requestFingerprint(body: unknown, scopes: readonly string[]): string {
-  return hashRequestBody({ body: body ?? {}, scopes: [...scopes].sort() });
+export function requestFingerprint(
+  body: unknown,
+  scopes: readonly string[],
+  ifMatch?: string,
+): string {
+  return hashRequestBody({
+    body: body ?? {},
+    scopes: [...scopes].sort(),
+    ...(ifMatch !== undefined ? { ifMatch } : {}),
+  });
 }
 
 export type BeginIdempotencyResult =
@@ -263,7 +271,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
     // different resources, e.g. comments on two different cases.
     const routePath = request.url.split('?')[0];
     const actorId = request.actor?.actorId ?? 'anonymous';
-    const requestHash = requestFingerprint(request.body, request.actor?.scopes ?? []);
+    const ifMatch = request.headers['if-match'];
+    const requestHash = requestFingerprint(
+      request.body,
+      request.actor?.scopes ?? [],
+      typeof ifMatch === 'string' ? ifMatch : undefined,
+    );
 
     return from(
       this.idempotencyService.beginExecution({
